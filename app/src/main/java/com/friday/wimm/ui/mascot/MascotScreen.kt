@@ -1,0 +1,417 @@
+package com.friday.wimm.ui.mascot
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(MascotPrefs.NAME, Context.MODE_MULTI_PROCESS) }
+
+    var enabled by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_ENABLED, true)) }
+    var scale by remember { mutableFloatStateOf(prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f)) }
+    var randomMoveEnabled by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_RANDOM_MOVE, true)) }
+    var speechEnabled by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_SPEECH, true)) }
+    var eyeTrackEnabled by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_EYE_TRACK, true)) }
+    var eyeTrackProb by remember { mutableFloatStateOf(prefs.getFloat(MascotPrefs.KEY_EYE_TRACK_PROB, 1.0f)) }
+    var hasOverlayPermission by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+    var pendingEnable by remember { mutableStateOf(false) }
+
+    // 每次进入页面时刷新设置（快捷菜单可能修改过）
+    LaunchedEffect(Unit) {
+        enabled = prefs.getBoolean(MascotPrefs.KEY_ENABLED, true)
+        scale = prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f)
+        randomMoveEnabled = prefs.getBoolean(MascotPrefs.KEY_RANDOM_MOVE, true)
+        speechEnabled = prefs.getBoolean(MascotPrefs.KEY_SPEECH, true)
+        eyeTrackEnabled = prefs.getBoolean(MascotPrefs.KEY_EYE_TRACK, true)
+        eyeTrackProb = prefs.getFloat(MascotPrefs.KEY_EYE_TRACK_PROB, 1.0f)
+    }
+
+    // 动画预览状态
+    var previewState by remember { mutableStateOf(MascotStateHolder()) }
+    var selectedAnimation by remember { mutableStateOf(AnimationState.IDLE) }
+
+    // 切换预览动画
+    LaunchedEffect(selectedAnimation) {
+        previewState = MascotStateHolder().apply {
+            animationState = selectedAnimation
+            isDizzy = selectedAnimation == AnimationState.DIZZY
+            if (selectedAnimation == AnimationState.SLEEPING) {
+                speechText = "Zzz..."
+            }
+        }
+    }
+
+    // 通知权限请求
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && pendingEnable) {
+            enabled = true
+            prefs.edit().putBoolean(MascotPrefs.KEY_ENABLED, true).commit()
+            MascotService.start(context, scale)
+        }
+        pendingEnable = false
+    }
+
+    // 从设置页返回时刷新权限
+    LaunchedEffect(Unit) {
+        hasOverlayPermission = Settings.canDrawOverlays(context)
+    }
+
+    fun enableMascot() {
+        if (!hasOverlayPermission) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            )
+            context.startActivity(intent)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasNotifPerm = context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            if (!hasNotifPerm) {
+                pendingEnable = true
+                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+        }
+        enabled = true
+        prefs.edit().putBoolean(MascotPrefs.KEY_ENABLED, true).commit()
+        MascotService.start(context, scale)
+    }
+
+    fun updateSetting(key: String, value: Boolean) {
+        prefs.edit().putBoolean(key, value).commit() // commit()确保跨进程可见
+        // 通知服务刷新设置
+        if (enabled) MascotService.notifySettingsChanged(context)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
+    ) {
+        // ── 预览区域 ──
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(300.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // 桌宠预览
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    FlyingBillMascot(
+                        scale = 1.0f,
+                        state = previewState,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                    )
+                }
+
+                // 动画选择按钮
+                @OptIn(ExperimentalLayoutApi::class)
+                FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    listOf(
+                        AnimationState.IDLE to "待机",
+                        AnimationState.SPINNING to "旋转",
+                        AnimationState.BOUNCING to "弹跳",
+                        AnimationState.SLEEPING to "睡觉",
+                        AnimationState.EXCITED to "兴奋",
+                        AnimationState.DIZZY to "眩晕",
+                        AnimationState.WALK_SIDE to "侧走",
+                        AnimationState.YAWN to "哈欠",
+                        AnimationState.STRETCH to "伸懒腰",
+                        AnimationState.LOOK_PHONE to "看手机",
+                        AnimationState.SNEEZE to "打喷嚏",
+                        AnimationState.ACCOUNTING to "记账",
+                        AnimationState.LISTEN_MUSIC to "听歌",
+                        AnimationState.COUNT_MONEY to "数钱",
+                        AnimationState.DRINK_COFFEE to "喝咖啡",
+                    ).forEach { (state, label) ->
+                        val isSelected = selectedAnimation == state
+                        Box(
+                            modifier = Modifier
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primary
+                                    else Color.Transparent,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isSelected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outline,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .clickable { selectedAnimation = state }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                label,
+                                fontSize = 11.sp,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // ── 启用开关 ──
+        SettingSwitchItem(
+            title = "启用 Wally",
+            subtitle = "在桌面上显示悬浮桌宠 Wally",
+            checked = enabled,
+            onCheckedChange = { newValue ->
+                if (newValue) {
+                    enableMascot()
+                } else {
+                    enabled = false
+                    prefs.edit().putBoolean(MascotPrefs.KEY_ENABLED, false).commit()
+                    MascotService.stop(context)
+                }
+            }
+        )
+
+        if (!hasOverlayPermission) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "需要悬浮窗权限才能显示桌宠",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    TextButton(onClick = {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                        context.startActivity(intent)
+                    }) {
+                        Text("去授权")
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ── 大小调节 ──
+        Text("Wally 大小", style = MaterialTheme.typography.titleMedium)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("小", style = MaterialTheme.typography.bodySmall)
+            Slider(
+                value = scale,
+                onValueChange = {
+                    scale = it
+                    prefs.edit().putFloat(MascotPrefs.KEY_SCALE, it).commit()
+                    if (enabled) MascotService.updateScale(context, it)
+                },
+                valueRange = 0.5f..2.0f,
+                steps = 5,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
+            )
+            Text("大", style = MaterialTheme.typography.bodySmall)
+        }
+        Text(
+            "当前: ${(scale * 100).toInt()}%",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp)
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ── 行为设置 ──
+        Text("行为设置", style = MaterialTheme.typography.titleMedium)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 随机移动
+        SettingSwitchItem(
+            title = "随机移动",
+            subtitle = "Wally 会随机在屏幕上移动位置",
+            checked = randomMoveEnabled,
+            onCheckedChange = {
+                randomMoveEnabled = it
+                updateSetting(MascotPrefs.KEY_RANDOM_MOVE, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 说话
+        SettingSwitchItem(
+            title = "说话",
+            subtitle = "Wally 会在待机、点击、收到通知时说话",
+            checked = speechEnabled,
+            onCheckedChange = {
+                speechEnabled = it
+                updateSetting(MascotPrefs.KEY_SPEECH, it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 眼睛注视
+        SettingSwitchItem(
+            title = "眼睛注视",
+            subtitle = "点击时 Wally 眼睛看向点击位置",
+            checked = eyeTrackEnabled,
+            onCheckedChange = {
+                eyeTrackEnabled = it
+                updateSetting(MascotPrefs.KEY_EYE_TRACK, it)
+            }
+        )
+
+        // 眼睛注视概率（仅在开启时显示）
+        AnimatedVisibility(
+            visible = eyeTrackEnabled,
+            enter = expandVertically(),
+            exit = shrinkVertically()
+        ) {
+            Column(modifier = Modifier.padding(start = 16.dp, top = 8.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("触发概率", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        "${(eyeTrackProb * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Slider(
+                    value = eyeTrackProb,
+                    onValueChange = {
+                        eyeTrackProb = it
+                        prefs.edit().putFloat(MascotPrefs.KEY_EYE_TRACK_PROB, it).commit()
+                        if (enabled) MascotService.notifySettingsChanged(context)
+                    },
+                    valueRange = 0f..1f,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "100% = 每次点击都注视，0% = 从不注视",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ── 操作提示 ──
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text("操作提示", style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("· 拖动 Wally 可以移动位置", style = MaterialTheme.typography.bodySmall)
+                Text("· 点击 Wally 会触发互动", style = MaterialTheme.typography.bodySmall)
+                Text("· 长按 Wally 可以打开快捷设置", style = MaterialTheme.typography.bodySmall)
+                Text("· 快速拖动 Wally 会触发眩晕", style = MaterialTheme.typography.bodySmall)
+                Text("· 收到记账通知时 Wally 会说话", style = MaterialTheme.typography.bodySmall)
+                Text("· 待机时 Wally 会随机说话和变换动画", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingSwitchItem(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}

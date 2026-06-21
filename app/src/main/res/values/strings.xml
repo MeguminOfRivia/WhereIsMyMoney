@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">我钱呢？！</string>
+    <string name="accessibility_service_description">自动监听微信和支付宝支付页面，识别支付成功信息并记录交易。</string>
+</resources>

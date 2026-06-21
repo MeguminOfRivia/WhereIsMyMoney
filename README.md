@@ -128,7 +128,7 @@ app/src/main/java/com/friday/wimm/
 
 ### 方式二：源码编译
 ```bash
-git clone https://github.com/your-username/WhereIsMyMoney.git
+git clone https://github.com/FridayKoi/WhereIsMyMoney.git
 cd WhereIsMyMoney
 ./gradlew assembleDebug
 ```

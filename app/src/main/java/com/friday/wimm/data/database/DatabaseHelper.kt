@@ -235,6 +235,53 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         return id
     }
 
+    fun getTransactionById(id: Long): Transaction? {
+        val cursor = readableDatabase.query(
+            "transactions", null, "id = ?", arrayOf(id.toString()), null, null, null
+        )
+        var result: Transaction? = null
+        if (cursor.moveToFirst()) result = cursorToTransaction(cursor)
+        cursor.close()
+        return result
+    }
+
+    /**
+     * 找一笔「同金额 + 同方向 + 指定来源」的近期交易。
+     *
+     * 用于「通知优先、屏幕补充」：无障碍看到一笔支付时，先看通知通道是不是已经记过了。
+     */
+    fun findRecentPayment(
+        amount: Double,
+        type: String,
+        since: Long,
+        until: Long,
+        dataSource: String
+    ): Transaction? {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT * FROM transactions " +
+                "WHERE dataSource = ? AND type = ? AND timestamp BETWEEN ? AND ? " +
+                "AND ABS(amount - ?) < 0.005 ORDER BY timestamp DESC LIMIT 1",
+            arrayOf(dataSource, type, since.toString(), until.toString(), amount.toString())
+        )
+        var result: Transaction? = null
+        if (cursor.moveToFirst()) result = cursorToTransaction(cursor)
+        cursor.close()
+        return result
+    }
+
+    /**
+     * 仅当商户名还是占位名（如「微信支付」「未知支出」）时才覆盖。
+     * 用户手动改过的具体名字永远不会被屏幕识别结果冲掉。
+     */
+    fun updateMerchantIfGeneric(id: Long, merchant: String, genericNames: List<String>): Boolean {
+        val current = getTransactionById(id) ?: return false
+        if (genericNames.none { current.merchant.contains(it) }) return false
+        val values = ContentValues().apply { put("merchant", merchant) }
+        return readableDatabase.let {
+            writableDatabase.update("transactions", values, "id = ?", arrayOf(id.toString())) > 0
+        }
+    }
+
     fun insertTransactions(transactions: List<Transaction>, fileId: Long = 0): Int {
         val db = writableDatabase
         var insertedCount = 0

@@ -211,6 +211,12 @@ object TransactionParser {
     fun isSupportedPackage(packageName: String?): Boolean =
         packageName == WECHAT_PACKAGE || packageName == ALIPAY_PACKAGE
 
+    /** 供转账事件分类器复用：从一段文字里取金额（分），取不到返回 null */
+    fun parseAmountCents(text: String): Long? = findAmount(text).cents
+
+    /** 供转账事件分类器复用：清洗一个可能的收款人名 */
+    fun merchantCandidate(raw: String): String? = cleanMerchant(raw)
+
     // ─────────────────────────────────────────────────────────────
     // 内部实现
     // ─────────────────────────────────────────────────────────────

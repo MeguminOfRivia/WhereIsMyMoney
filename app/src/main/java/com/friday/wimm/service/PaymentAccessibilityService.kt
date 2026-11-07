@@ -11,27 +11,29 @@ import com.friday.wimm.service.TransactionParser.Kind
 import com.friday.wimm.service.TransactionParser.Message
 import com.friday.wimm.service.TransactionParser.Outcome
 import com.friday.wimm.util.AppLog
+import com.friday.wimm.util.MerchantNames
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
 /**
- * 通过无障碍服务读取支付结果页面。
+ * 通过无障碍服务读取支付/转账结果页面。
  *
- * 去重方式（旧实现是「同金额 10 秒内只记一次」，会误杀两笔真实的同额消费）：
- *  - 每**进入一次**支付结果页，`pageGeneration + 1`；
- *  - 指纹 = 会话随机串 + windowId + 世代号，页面内容反复刷新时世代号不变 ⇒ 天然去重；
- *  - 两次独立支付一定会进入两次页面 ⇒ 世代号不同 ⇒ 两笔都会被记录；
- *  - 进程重启后会话随机串改变，不会和历史记录撞车。
+ * 定位：**通知的补充**，不是独立的记账来源。
+ *  - 转账：付款方没有支付通知，金额只能从这里拿 → 写进待确认记录；
+ *  - 普通支付：先看通知通道是否已经记过这笔（同金额同方向），记过就只补商户名；
+ *  - 通知没覆盖到：先入账，3 分钟后再静默问一句「这是真实消费吗」。
+ *
+ * 去重不再依赖「同金额 10 秒」，而是「每进入一次结果页算一个世代」，
+ * 页面反复刷新不会重复、两次独立支付也不会被误杀。
  */
 class PaymentAccessibilityService : AccessibilityService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    /** 每次服务启动换一个随机串，保证指纹不会跨进程重启碰撞 */
     private val sessionId: String = UUID.randomUUID().toString().take(8)
 
     private var pageGeneration = 0
@@ -65,8 +67,7 @@ class PaymentAccessibilityService : AccessibilityService() {
                     pageGeneration += 1
                     currentWindowId = safeEvent.windowId
                     isOnPayPage = true
-                    AppLog.d(TAG) { "进入支付结果页 (第 $pageGeneration 次)" }
-                    processPage(safeEvent, packageName)
+                    handlePage(collectPageTexts(safeEvent), packageName)
                 } else {
                     isOnPayPage = false
                 }
@@ -74,7 +75,7 @@ class PaymentAccessibilityService : AccessibilityService() {
 
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (isOnPayPage && safeEvent.windowId == currentWindowId) {
-                    processPage(safeEvent, packageName)
+                    handlePage(collectPageTexts(safeEvent), packageName)
                 }
             }
         }
@@ -84,11 +85,14 @@ class PaymentAccessibilityService : AccessibilityService() {
         className.contains(it, ignoreCase = true)
     }
 
-    private fun processPage(event: AccessibilityEvent, packageName: String) {
+    private fun collectPageTexts(event: AccessibilityEvent): List<String> {
         val fromSource = collectTexts(event.source)
-        val texts = if (fromSource.isNotEmpty()) fromSource else collectTexts(rootInActiveWindow)
-        if (texts.isEmpty()) return
+        return if (fromSource.isNotEmpty()) fromSource else collectTexts(rootInActiveWindow)
+    }
 
+    private fun handlePage(texts: List<String>, packageName: String) {
+        if (texts.isEmpty()) return
+        val fullText = texts.joinToString(" ")
         val message = Message(
             packageName = packageName,
             title = "",
@@ -96,52 +100,107 @@ class PaymentAccessibilityService : AccessibilityService() {
             identity = "$sessionId#$currentWindowId#$pageGeneration",
             channel = Channel.ACCESSIBILITY
         )
+        val draft = (TransactionParser.parse(message) as? Outcome.Parsed)?.draft
 
-        when (val outcome = TransactionParser.parse(message)) {
-            is Outcome.Ignored -> AppLog.d(TAG) { "页面未识别为交易：${outcome.reason}" }
-            is Outcome.Parsed -> scope.launch { save(outcome.draft) }
+        scope.launch {
+            try {
+                processPage(packageName, fullText, draft)
+            } catch (e: Exception) {
+                AppLog.e(TAG) { "处理页面失败: ${e.javaClass.simpleName}" }
+            }
         }
     }
 
-    private suspend fun save(draft: TransactionParser.Draft) {
+    private suspend fun processPage(
+        packageName: String,
+        fullText: String,
+        draft: TransactionParser.Draft?
+    ) {
         val application = applicationContext as? MyApplication ?: return
-        // 金额都没识别出来的页面不落库，避免制造待录入垃圾
-        if (draft.needsAmount || draft.amountCents <= 0) return
+        val now = System.currentTimeMillis()
+        val amountCents = draft?.amountCents ?: 0
+        val merchant = draft?.merchant.orEmpty().let {
+            if (MerchantNames.isGeneric(it)) "" else it
+        }
+
+        // ── 1) 转账页面：只负责"提供金额"，是否入账由状态机决定 ──
+        if (TransferEventParser.isOutgoingResultPage(fullText)) {
+            if (amountCents > 0) {
+                application.transferCoordinator.onOutgoingPageSeen(amountCents, merchant, now)
+                AppLog.d(TAG) { "已挂起一笔待确认的转出" }
+            }
+            return
+        }
+        if (TransferEventParser.isIncomingDetailPage(fullText)) {
+            if (amountCents > 0) {
+                application.transferCoordinator.onIncomingAmountSeen(amountCents, now, merchant)
+                AppLog.d(TAG) { "已为待确认收款补上金额" }
+            }
+            return
+        }
+
+        // ── 2) 普通支付：通知优先，屏幕只做补充 ──
+        if (draft == null || draft.needsAmount || amountCents <= 0) return
+        val db = application.databaseHelper
+        val amount = amountCents / 100.0
+        val existing = db.findRecentPayment(
+            amount = amount,
+            type = draft.kind.value,
+            since = now - NOTIFICATION_LOOKBACK,
+            until = now + CLOCK_SKEW_ALLOWANCE,
+            dataSource = "notification"
+        )
+        if (existing != null) {
+            if (merchant.isNotEmpty()) {
+                db.updateMerchantIfGeneric(existing.id, merchant, MerchantNames.GENERIC)
+            }
+            AppLog.d(TAG) { "通知通道已经记过这笔，屏幕只做补充" }
+            return
+        }
 
         val transaction = Transaction(
-            amount = draft.amountCents / 100.0,
+            amount = amount,
             merchant = draft.merchant,
             source = draft.source,
-            timestamp = System.currentTimeMillis(),
+            timestamp = now,
             type = draft.kind.value,
             transactionNo = draft.fingerprint,
             dataSource = "accessibility",
             note = draft.note
         )
-
         val result = application.transactionRepository.insertDedup(transaction)
-        if (result.inserted) {
-            AppLog.d(TAG) { "无障碍记入一笔 ${if (draft.kind == Kind.INCOME) "收入" else "支出"}" }
-            com.friday.wimm.ui.mascot.MascotService.notifyTransaction(
-                context = this@PaymentAccessibilityService,
-                isIncome = draft.kind == Kind.INCOME,
-                merchant = draft.merchant
-            )
-        } else {
-            AppLog.d(TAG) { "同一页面已记录过，跳过" }
-        }
+        if (!result.inserted) return
+
+        AppLog.d(TAG) { "通知通道没覆盖到，先入账，稍后询问" }
+        scheduleReview(result.id, amount, draft.merchant)
     }
 
     /**
-     * 收集页面文本，带两个上限：
-     *  - 节点数量上限，避免在超大页面上做无谓的深度遍历；
-     *  - 文本总长度上限，避免把整页聊天记录都抓下来。
+     * 3 分钟后回头看一眼：这期间通知通道有没有认领这笔？
+     * 没有才弹出静默询问，避免正常收到通知时打扰用户。
      */
+    private fun scheduleReview(transactionId: Long, amount: Double, merchant: String) {
+        scope.launch {
+            delay(REVIEW_DELAY_MS)
+            val application = applicationContext as? MyApplication ?: return@launch
+            val db = application.databaseHelper
+            val transaction = db.getTransactionById(transactionId) ?: return@launch
+            val claimed = db.findRecentPayment(
+                amount = transaction.amount,
+                type = transaction.type,
+                since = transaction.timestamp - NOTIFICATION_LOOKBACK,
+                until = transaction.timestamp + REVIEW_DELAY_MS + CLOCK_SKEW_ALLOWANCE,
+                dataSource = "notification"
+            ) != null
+            if (claimed) return@launch
+            ReviewNotifier.showAsk(this@PaymentAccessibilityService, transactionId, amount, merchant)
+        }
+    }
+
     private fun collectTexts(root: AccessibilityNodeInfo?): List<String> {
         if (root == null) return emptyList()
         val texts = ArrayList<String>(32)
-        val budget = intArrayOf(MAX_NODES)
-        walk(root, texts, budget, 0)
+        walk(root, texts, intArrayOf(MAX_NODES), 0)
         return texts
     }
 
@@ -178,6 +237,15 @@ class PaymentAccessibilityService : AccessibilityService() {
         private const val TAG = "PaymentAccessibility"
         private const val MAX_NODES = 300
         private const val MAX_DEPTH = 25
+
+        /** 屏幕看到一笔支付时，往前找多久内的通知记录 */
+        private const val NOTIFICATION_LOOKBACK = 10 * 60 * 1000L
+
+        /** 设备时间误差容忍 */
+        private const val CLOCK_SKEW_ALLOWANCE = 60 * 1000L
+
+        /** 入账后等多久再询问用户 */
+        private const val REVIEW_DELAY_MS = 3 * 60 * 1000L
 
         private val PAY_PAGE_HINTS = listOf(
             "PayResultUI", "PaySuccessUI", "OrderPayResultUI",

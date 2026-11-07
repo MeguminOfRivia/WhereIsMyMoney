@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import com.friday.wimm.MyApplication
 import com.friday.wimm.data.model.Transaction
+import com.friday.wimm.data.transfer.TransferCoordinator
 import com.friday.wimm.service.TransactionParser.Channel
 import com.friday.wimm.service.TransactionParser.Draft
 import com.friday.wimm.service.TransactionParser.Kind
@@ -64,6 +65,13 @@ class PaymentNotificationListener : NotificationListenerService() {
 
         val message = buildMessage(notification) ?: return
 
+        // 转账事件优先判断：这类通知往往没有金额，走普通解析会被丢掉
+        val plainText = (listOf(message.title) + message.body).joinToString(" ")
+        TransferEventParser.classify(message.title, plainText)?.let { event ->
+            scope.launch { handleTransferEvent(event, message.packageName) }
+            return
+        }
+
         when (val outcome = TransactionParser.parse(message)) {
             is Outcome.Ignored -> AppLog.d(TAG) { "忽略一条通知：${outcome.reason}" }
             is Outcome.Parsed -> scope.launch { handleParsed(outcome.draft) }
@@ -95,11 +103,33 @@ class PaymentNotificationListener : NotificationListenerService() {
 
     private suspend fun handleParsed(draft: Draft) {
         val application = applicationContext as? MyApplication ?: return
+        val db = application.databaseHelper
+        val now = System.currentTimeMillis()
+
+        // 通知为准：如果屏幕已经先记了一条同金额、同方向、商户相容的记录，
+        // 把它收编掉（删掉屏幕那条），只保留通知这条，避免一笔账记两遍。
+        val adopted = if (draft.amountCents > 0) {
+            db.findRecentPayment(
+                amount = draft.amountCents / 100.0,
+                type = draft.kind.value,
+                since = now - CROSS_CHANNEL_WINDOW,
+                until = now + CLOCK_SKEW_ALLOWANCE,
+                dataSource = "accessibility"
+            )?.takeIf { com.friday.wimm.util.MerchantNames.compatible(it.merchant, draft.merchant) }
+        } else {
+            null
+        }
+        if (adopted != null) {
+            db.deleteTransaction(adopted.id)
+            AppLog.d(TAG) { "通知认领了屏幕先记的一条，已合并" }
+        }
+
+        val merchant = com.friday.wimm.util.MerchantNames.better(adopted?.merchant, draft.merchant)
         val transaction = Transaction(
             amount = draft.amountCents / 100.0,
-            merchant = draft.merchant,
+            merchant = merchant,
             source = draft.source,
-            timestamp = System.currentTimeMillis(),
+            timestamp = now,
             type = draft.kind.value,
             transactionNo = draft.fingerprint,
             dataSource = "notification",
@@ -119,7 +149,7 @@ class PaymentNotificationListener : NotificationListenerService() {
             com.friday.wimm.ui.mascot.MascotService.notifyTransaction(
                 context = this@PaymentNotificationListener,
                 isIncome = draft.kind == Kind.INCOME,
-                merchant = draft.merchant
+                merchant = transaction.merchant
             )
             if (draft.needsAmount) {
                 notifyMissingAmount(draft, id)
@@ -127,6 +157,112 @@ class PaymentNotificationListener : NotificationListenerService() {
                 notifyTransactionRecorded(transaction, id)
             }
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // 转账事件
+    // ─────────────────────────────────────────────────────────
+
+    private suspend fun handleTransferEvent(
+        event: TransferEventParser.Event,
+        packageName: String
+    ) {
+        val application = applicationContext as? MyApplication ?: return
+        val now = System.currentTimeMillis()
+        val coordinator = application.transferCoordinator
+        val source = if (packageName == TransactionParser.WECHAT_PACKAGE) "wechat" else "alipay"
+
+        when (event) {
+            is TransferEventParser.Event.IncomingNotice -> {
+                coordinator.onIncomingNotice(event.merchant, now)
+                AppLog.d(TAG) { "挂起一笔待确认收款（金额等待屏幕补充）" }
+            }
+
+            is TransferEventParser.Event.IncomingAccepted -> {
+                val booking = coordinator.onIncomingAccepted(now) ?: return
+                bookTransfer(application, booking, source)
+            }
+
+            is TransferEventParser.Event.OutgoingConfirmed -> {
+                val booking = coordinator.onOutgoingConfirmed(now) ?: return
+                bookTransfer(application, booking, source)
+            }
+
+            is TransferEventParser.Event.Refunded -> {
+                when (val result = coordinator.onRefunded(now)) {
+                    is TransferCoordinator.RefundResult.Reversed ->
+                        bookReversal(application, result, source)
+
+                    is TransferCoordinator.RefundResult.Cancelled ->
+                        AppLog.d(TAG) { "转账已退回，作废那条待确认记录" }
+
+                    TransferCoordinator.RefundResult.NotFound -> Unit
+                }
+            }
+        }
+    }
+
+    private suspend fun bookTransfer(
+        application: MyApplication,
+        booking: TransferCoordinator.Booking,
+        source: String
+    ) {
+        val transaction = Transaction(
+            amount = booking.amountCents / 100.0,
+            merchant = booking.merchant,
+            source = source,
+            timestamp = System.currentTimeMillis(),
+            type = booking.kind,
+            // 用待确认记录的 id 作为交易号：同一笔转账无论确认通知来几次都只入账一次
+            transactionNo = "transfer:${booking.transferId}",
+            dataSource = "notification",
+            note = booking.note
+        )
+        val result = application.transactionRepository.insertDedup(transaction)
+        if (!result.inserted) return
+
+        withContext(Dispatchers.Main) {
+            com.friday.wimm.ui.mascot.MascotService.notifyTransaction(
+                context = this@PaymentNotificationListener,
+                isIncome = booking.kind == "income",
+                merchant = transaction.merchant
+            )
+            if (booking.amountCents <= 0) {
+                notifyMissingAmount(
+                    Draft(
+                        amountCents = 0,
+                        merchant = transaction.merchant,
+                        kind = Kind.INCOME,
+                        note = booking.note,
+                        source = source,
+                        fingerprint = "transfer:${booking.transferId}",
+                        needsAmount = true
+                    ),
+                    result.id
+                )
+            } else {
+                notifyTransactionRecorded(transaction, result.id)
+            }
+        }
+    }
+
+    private suspend fun bookReversal(
+        application: MyApplication,
+        reversed: TransferCoordinator.RefundResult.Reversed,
+        source: String
+    ) {
+        val transaction = Transaction(
+            amount = reversed.amountCents / 100.0,
+            merchant = reversed.merchant.ifBlank { TransferCoordinator.UNKNOWN },
+            source = source,
+            timestamp = System.currentTimeMillis(),
+            type = "income",
+            transactionNo = "transfer-reverse:${reversed.transferId}",
+            dataSource = "notification",
+            note = "转账退回"
+        )
+        application.transactionRepository.insertDedup(transaction)
+        AppLog.d(TAG) { "转账退回，已补一笔冲正" }
     }
 
     // ─────────────────────────────────────────────────────────
@@ -260,6 +396,12 @@ class PaymentNotificationListener : NotificationListenerService() {
     companion object {
         private const val TAG = "PaymentNotification"
         const val CHANNEL_ID = "wimm_transaction_alert"
+
+        /** 通知到达时，往前找多久内的"屏幕记录"来收编 */
+        private const val CROSS_CHANNEL_WINDOW = 3 * 60 * 1000L
+
+        /** 设备时间误差容忍 */
+        private const val CLOCK_SKEW_ALLOWANCE = 60 * 1000L
 
         /** 渠道只创建一次，绝不删除重建，避免重置用户的声音/悬浮设置 */
         fun ensureChannel(context: Context) {

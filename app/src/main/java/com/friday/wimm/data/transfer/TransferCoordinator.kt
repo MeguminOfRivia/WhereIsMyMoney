@@ -13,6 +13,7 @@ package com.friday.wimm.data.transfer
 class TransferCoordinator(private val store: TransferStore) {
 
     data class Booking(
+        val transferId: Long,
         val amountCents: Long,
         val merchant: String,
         /** expense / income */
@@ -25,7 +26,11 @@ class TransferCoordinator(private val store: TransferStore) {
         data class Cancelled(val transfer: PendingTransfer) : RefundResult
 
         /** 已经入过账，需要补一笔反向记录把钱加回来 */
-        data class Reversed(val amountCents: Long, val merchant: String) : RefundResult
+        data class Reversed(
+            val transferId: Long,
+            val amountCents: Long,
+            val merchant: String
+        ) : RefundResult
 
         data object NotFound : RefundResult
     }
@@ -84,6 +89,7 @@ class TransferCoordinator(private val store: TransferStore) {
 
         store.updateStatus(matched.id, TransferStatus.COMMITTED)
         return Booking(
+            transferId = matched.id,
             amountCents = matched.amountCents,
             merchant = matched.merchant.ifBlank { merchant ?: UNKNOWN },
             kind = "expense",
@@ -116,7 +122,11 @@ class TransferCoordinator(private val store: TransferStore) {
         )
         bestMatch(committed, amountCents, merchant)?.let {
             store.updateStatus(it.id, TransferStatus.CANCELLED)
-            return RefundResult.Reversed(it.amountCents, it.merchant)
+            return RefundResult.Reversed(
+                transferId = it.id,
+                amountCents = it.amountCents,
+                merchant = it.merchant
+            )
         }
 
         return RefundResult.NotFound
@@ -186,6 +196,7 @@ class TransferCoordinator(private val store: TransferStore) {
         val matched = candidates.firstOrNull() ?: return null
         store.updateStatus(matched.id, TransferStatus.COMMITTED)
         return Booking(
+            transferId = matched.id,
             amountCents = matched.amountCents,
             merchant = matched.merchant.ifBlank { UNKNOWN },
             kind = "income",

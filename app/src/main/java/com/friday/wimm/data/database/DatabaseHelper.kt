@@ -21,6 +21,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         db.execSQL(SQL_CREATE_CARDS)
         db.execSQL(SQL_CREATE_CARD_CATEGORIES)
         db.execSQL(SQL_CREATE_CARD_MERCHANT_CATEGORIES)
+        db.execSQL(SQL_CREATE_PENDING_TRANSFERS)
         db.execSQL(SQL_CREATE_UNIQUE_TRANSACTION_NO)
     }
 
@@ -53,6 +54,10 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             // 这样既能建索引，又不会丢用户已经记下的账。
             db.execSQL(SQL_DEDUP_TRANSACTION_NO)
             db.execSQL(SQL_CREATE_UNIQUE_TRANSACTION_NO)
+        }
+        if (oldVersion < 8) {
+            // 升级到版本8：转账「待确认」记录表
+            db.execSQL(SQL_CREATE_PENDING_TRANSFERS)
         }
     }
 
@@ -712,7 +717,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     companion object {
         const val DATABASE_NAME = "expense_database"
-        const val DATABASE_VERSION = 7
+        const val DATABASE_VERSION = 8
 
         /** 把历史重复交易号的「后来者」置空，保证唯一索引能建起来（不会删除任何记录） */
         private const val SQL_DEDUP_TRANSACTION_NO = """
@@ -729,6 +734,25 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_no
             ON transactions(transactionNo)
             WHERE transactionNo IS NOT NULL
+        """
+
+        /**
+         * 转账「待确认」记录。
+         *
+         * 微信转账：付款方没有支付通知、确认通知里也没有金额，
+         * 所以要在「屏幕读到的金额」和「通知确认」之间留一张纸条。
+         */
+        private const val SQL_CREATE_PENDING_TRANSFERS = """
+            CREATE TABLE IF NOT EXISTS pending_transfers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                direction TEXT NOT NULL,
+                amountCents INTEGER NOT NULL DEFAULT 0,
+                merchant TEXT NOT NULL DEFAULT '',
+                createdAt INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                source TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT ''
+            )
         """
 
         private const val SQL_CREATE_TRANSACTIONS = """

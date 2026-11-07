@@ -4,16 +4,18 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.friday.wimm.MyApplication
+import com.friday.wimm.util.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/** 「误识别·删除」按钮的处理器 */
 class DeleteTransactionReceiver : BroadcastReceiver() {
+
     companion object {
         private const val TAG = "DeleteTransactionRx"
         const val EXTRA_TRANSACTION_ID = "extra_transaction_id"
@@ -24,38 +26,36 @@ class DeleteTransactionReceiver : BroadcastReceiver() {
         val transactionId = intent.getLongExtra(EXTRA_TRANSACTION_ID, -1)
         val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0)
 
-        Log.d(TAG, "删除交易: id=$transactionId, notificationId=$notificationId")
-
         val pendingResult = goAsync()
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // 第一步：用空通知替换原通知
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         try {
-            val emptyNotification = NotificationCompat.Builder(context, "wimm_transaction_alert")
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("")
-                .setContentText("")
-                .setPriority(NotificationCompat.PRIORITY_MIN)
-                .build()
-            notificationManager.notify(notificationId, emptyNotification)
+            PaymentNotificationListener.ensureChannel(context)
+            manager.notify(
+                notificationId,
+                NotificationCompat.Builder(context, PaymentNotificationListener.CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle("")
+                    .setContentText("")
+                    .setPriority(NotificationCompat.PRIORITY_MIN)
+                    .build()
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "替换通知失败", e)
+            AppLog.e(TAG) { "替换通知失败: ${e.javaClass.simpleName}" }
         }
 
-        // 第二步：延迟100ms后取消通知
         CoroutineScope(Dispatchers.Main).launch {
+            delay(100)
             try {
-                delay(100)
-                notificationManager.cancel(notificationId)
-                Log.d(TAG, "已取消通知: $notificationId")
+                manager.cancel(notificationId)
             } catch (e: Exception) {
-                Log.e(TAG, "取消通知失败", e)
+                AppLog.e(TAG) { "取消通知失败: ${e.javaClass.simpleName}" }
             }
             pendingResult.finish()
         }
 
         if (transactionId <= 0) {
-            Log.d(TAG, "无效交易ID")
+            AppLog.d(TAG) { "无效的交易 ID，忽略" }
             return
         }
 
@@ -63,12 +63,11 @@ class DeleteTransactionReceiver : BroadcastReceiver() {
             try {
                 val application = context.applicationContext as MyApplication
                 application.transactionRepository.deleteTransaction(transactionId)
-                Log.d(TAG, "删除成功: id=$transactionId")
                 CoroutineScope(Dispatchers.Main).launch {
                     Toast.makeText(context, "已删除误识别记录", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "删除失败", e)
+                AppLog.e(TAG) { "删除失败: ${e.javaClass.simpleName}" }
             }
         }
     }

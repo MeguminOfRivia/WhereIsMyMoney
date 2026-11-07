@@ -21,6 +21,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         db.execSQL(SQL_CREATE_CARDS)
         db.execSQL(SQL_CREATE_CARD_CATEGORIES)
         db.execSQL(SQL_CREATE_CARD_MERCHANT_CATEGORIES)
+        db.execSQL(SQL_CREATE_UNIQUE_TRANSACTION_NO)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -45,6 +46,13 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             db.execSQL(SQL_CREATE_CARDS)
             db.execSQL(SQL_CREATE_CARD_CATEGORIES)
             db.execSQL(SQL_CREATE_CARD_MERCHANT_CATEGORIES)
+        }
+        if (oldVersion < 7) {
+            // 升级到版本7：给 transactionNo 建唯一索引，实现数据库层面的去重。
+            // 历史数据里可能已有重复的交易号，先把「后来的重复项」的交易号置空（不删记录），
+            // 这样既能建索引，又不会丢用户已经记下的账。
+            db.execSQL(SQL_DEDUP_TRANSACTION_NO)
+            db.execSQL(SQL_CREATE_UNIQUE_TRANSACTION_NO)
         }
     }
 
@@ -172,6 +180,54 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             put("fileId", transaction.fileId)
         }
         return db.insert("transactions", null, values)
+    }
+
+    /**
+     * 带指纹去重的插入。
+     *
+     * - 若 transactionNo 为 null，退化为普通插入；
+     * - 若指纹已存在（唯一索引冲突），返回库里已有的那条记录 id，`inserted = false`，
+     *   调用方据此跳过重复的「已记账」通知。
+     */
+    fun insertTransactionDedup(transaction: Transaction): InsertResult {
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put("amount", transaction.amount)
+            put("merchant", transaction.merchant)
+            put("categoryId", transaction.categoryId)
+            put("source", transaction.source)
+            put("timestamp", transaction.timestamp)
+            put("note", transaction.note)
+            put("type", transaction.type)
+            put("transactionNo", transaction.transactionNo)
+            put("dataSource", transaction.dataSource)
+            put("fileId", transaction.fileId)
+        }
+        val rowId = db.insertWithOnConflict(
+            "transactions",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_IGNORE
+        )
+        if (rowId != -1L) return InsertResult(rowId, inserted = true)
+
+        val existingId = transaction.transactionNo?.let { getTransactionIdByTransactionNo(it) }
+        return InsertResult(existingId ?: -1L, inserted = false)
+    }
+
+    fun getTransactionIdByTransactionNo(transactionNo: String): Long? {
+        val db = readableDatabase
+        val cursor = db.query(
+            "transactions",
+            arrayOf("id"),
+            "transactionNo = ?",
+            arrayOf(transactionNo),
+            null, null, null
+        )
+        var id: Long? = null
+        if (cursor.moveToFirst()) id = cursor.getLong(0)
+        cursor.close()
+        return id
     }
 
     fun insertTransactions(transactions: List<Transaction>, fileId: Long = 0): Int {
@@ -656,7 +712,24 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     companion object {
         const val DATABASE_NAME = "expense_database"
-        const val DATABASE_VERSION = 6
+        const val DATABASE_VERSION = 7
+
+        /** 把历史重复交易号的「后来者」置空，保证唯一索引能建起来（不会删除任何记录） */
+        private const val SQL_DEDUP_TRANSACTION_NO = """
+            UPDATE transactions SET transactionNo = NULL
+            WHERE transactionNo IS NOT NULL
+              AND id NOT IN (
+                SELECT MIN(id) FROM transactions
+                WHERE transactionNo IS NOT NULL
+                GROUP BY transactionNo
+              )
+        """
+
+        private const val SQL_CREATE_UNIQUE_TRANSACTION_NO = """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_no
+            ON transactions(transactionNo)
+            WHERE transactionNo IS NOT NULL
+        """
 
         private const val SQL_CREATE_TRANSACTIONS = """
             CREATE TABLE transactions (
@@ -739,6 +812,12 @@ data class MerchantTotal(
     val total: Double,
     val type: String = "expense",
     val lastTimestamp: Long = 0L
+)
+
+/** 插入结果：inserted=false 表示指纹已存在，id 指向库里已有的那条记录 */
+data class InsertResult(
+    val id: Long,
+    val inserted: Boolean
 )
 
 data class ImportRecord(

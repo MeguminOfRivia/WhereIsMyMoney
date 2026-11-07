@@ -35,8 +35,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     buildFeatures {
-    compose = true
-}
+        compose = true
+        // 用于 AppLog：只有 debug 包才输出日志，release 包完全静默
+        buildConfig = true
+    }
 
 tasks.register("testClasses") {
     description = "Placeholder for test classes task"

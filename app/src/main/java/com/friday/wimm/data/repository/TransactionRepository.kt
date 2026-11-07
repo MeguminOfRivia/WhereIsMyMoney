@@ -2,6 +2,7 @@ package com.friday.wimm.data.repository
 
 import com.friday.wimm.data.database.DatabaseHelper
 import com.friday.wimm.data.database.ImportRecord
+import com.friday.wimm.data.database.InsertResult
 import com.friday.wimm.data.database.MerchantTotal
 import com.friday.wimm.data.model.Card
 import com.friday.wimm.data.model.Transaction
@@ -12,6 +13,11 @@ class TransactionRepository(private val dbHelper: DatabaseHelper) {
 
     suspend fun insert(transaction: Transaction): Long = withContext(Dispatchers.IO) {
         dbHelper.insertTransaction(transaction)
+    }
+
+    /** 带指纹去重的插入：同一笔交易重复到达时不会写入第二条 */
+    suspend fun insertDedup(transaction: Transaction): InsertResult = withContext(Dispatchers.IO) {
+        dbHelper.insertTransactionDedup(transaction)
     }
 
     suspend fun updateAmount(id: Long, amount: Double) = withContext(Dispatchers.IO) {

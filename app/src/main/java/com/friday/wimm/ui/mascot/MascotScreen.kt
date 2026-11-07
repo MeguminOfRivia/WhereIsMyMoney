@@ -44,6 +44,56 @@ fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
     var hasOverlayPermission by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var pendingEnable by remember { mutableStateOf(false) }
 
+    // ── 形象设置 ──────────────────────────────────────────
+    var style by remember {
+        mutableStateOf(
+            MascotStyle.from(prefs.getString(MascotPrefs.KEY_STYLE, MascotStyle.BUILTIN.value))
+        )
+    }
+    var imageUri by remember { mutableStateOf(prefs.getString(MascotPrefs.KEY_IMAGE_URI, null)) }
+    var mouthUri by remember { mutableStateOf(prefs.getString(MascotPrefs.KEY_MOUTH_URI, null)) }
+    var animMode by remember {
+        mutableStateOf(
+            MascotAnimMode.from(
+                prefs.getString(MascotPrefs.KEY_ANIM_MODE, MascotAnimMode.JELLY.value)
+            )
+        )
+    }
+    var clickJelly by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_CLICK_JELLY, true)) }
+    var previewSpeech by remember { mutableStateOf(false) }
+
+    /** 选图后要长期保留访问权限，否则重启 App 就读不到了 */
+    fun persistUri(uri: android.net.Uri) {
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        MascotImageLoader.clearCache()
+        if (enabled) MascotService.notifySettingsChanged(context)
+    }
+
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            prefs.edit().putString(MascotPrefs.KEY_IMAGE_URI, uri.toString()).commit()
+            imageUri = uri.toString()
+            persistUri(uri)
+        }
+    }
+
+    val mouthPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            prefs.edit().putString(MascotPrefs.KEY_MOUTH_URI, uri.toString()).commit()
+            mouthUri = uri.toString()
+            persistUri(uri)
+        }
+    }
+
     // 每次进入页面时刷新设置（快捷菜单可能修改过）
     LaunchedEffect(Unit) {
         enabled = prefs.getBoolean(MascotPrefs.KEY_ENABLED, true)
@@ -52,6 +102,13 @@ fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
         speechEnabled = prefs.getBoolean(MascotPrefs.KEY_SPEECH, true)
         eyeTrackEnabled = prefs.getBoolean(MascotPrefs.KEY_EYE_TRACK, true)
         eyeTrackProb = prefs.getFloat(MascotPrefs.KEY_EYE_TRACK_PROB, 1.0f)
+        style = MascotStyle.from(prefs.getString(MascotPrefs.KEY_STYLE, MascotStyle.BUILTIN.value))
+        imageUri = prefs.getString(MascotPrefs.KEY_IMAGE_URI, null)
+        mouthUri = prefs.getString(MascotPrefs.KEY_MOUTH_URI, null)
+        animMode = MascotAnimMode.from(
+            prefs.getString(MascotPrefs.KEY_ANIM_MODE, MascotAnimMode.JELLY.value)
+        )
+        clickJelly = prefs.getBoolean(MascotPrefs.KEY_CLICK_JELLY, true)
     }
 
     // 动画预览状态
@@ -140,14 +197,31 @@ fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
                         .weight(1f),
                     contentAlignment = Alignment.BottomCenter
                 ) {
-                    FlyingBillMascot(
-                        scale = 1.0f,
-                        state = previewState,
-                        modifier = Modifier.graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                        }
-                    )
+                    if (style == MascotStyle.CUSTOM && !imageUri.isNullOrBlank()) {
+                        CustomImageMascot(
+                            imageUri = imageUri,
+                            mouthUri = mouthUri,
+                            animMode = animMode,
+                            clickJelly = false,
+                            speechVisible = previewSpeech || previewState.speechText != null,
+                            clickTick = 0,
+                            modifier = Modifier
+                                .size(130.dp, 155.dp)
+                                .graphicsLayer {
+                                    scaleX = scale
+                                    scaleY = scale
+                                }
+                        )
+                    } else {
+                        FlyingBillMascot(
+                            scale = 1.0f,
+                            state = previewState,
+                            modifier = Modifier.graphicsLayer {
+                                scaleX = scale
+                                scaleY = scale
+                            }
+                        )
+                    }
                 }
 
                 // 动画选择按钮
@@ -285,6 +359,132 @@ fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 4.dp)
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ── 形象 ──
+        Text("形象", style = MaterialTheme.typography.titleMedium)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = style == MascotStyle.BUILTIN,
+                onClick = {
+                    style = MascotStyle.BUILTIN
+                    prefs.edit().putString(MascotPrefs.KEY_STYLE, style.value).commit()
+                    if (enabled) MascotService.notifySettingsChanged(context)
+                },
+                label = { Text("内置 Wally") }
+            )
+            FilterChip(
+                selected = style == MascotStyle.CUSTOM,
+                onClick = {
+                    style = MascotStyle.CUSTOM
+                    prefs.edit().putString(MascotPrefs.KEY_STYLE, style.value).commit()
+                    if (enabled) MascotService.notifySettingsChanged(context)
+                },
+                label = { Text("自定义图片") }
+            )
+        }
+
+        if (style == MascotStyle.CUSTOM) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = { imagePicker.launch(arrayOf("image/*")) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (imageUri.isNullOrBlank()) "选择角色图片 / GIF" else "更换角色图片 / GIF")
+            }
+            Text(
+                when {
+                    imageUri.isNullOrBlank() -> "还没有选择图片，悬浮窗会先显示内置 Wally"
+                    else -> "已选择角色图片"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, top = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { mouthPicker.launch(arrayOf("image/*")) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (mouthUri.isNullOrBlank()) "选择张口差分（可选）" else "更换张口差分")
+            }
+            if (!mouthUri.isNullOrBlank()) {
+                TextButton(
+                    onClick = {
+                        prefs.edit().remove(MascotPrefs.KEY_MOUTH_URI).commit()
+                        mouthUri = null
+                        if (animMode == MascotAnimMode.MOUTH) {
+                            animMode = MascotAnimMode.JELLY
+                            prefs.edit().putString(MascotPrefs.KEY_ANIM_MODE, animMode.value).commit()
+                        }
+                        if (enabled) MascotService.notifySettingsChanged(context)
+                    }
+                ) { Text("移除张口差分") }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text("对话出现时的动画", style = MaterialTheme.typography.bodyMedium)
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = animMode == MascotAnimMode.JELLY,
+                    onClick = {
+                        animMode = MascotAnimMode.JELLY
+                        prefs.edit().putString(MascotPrefs.KEY_ANIM_MODE, animMode.value).commit()
+                        if (enabled) MascotService.notifySettingsChanged(context)
+                    },
+                    label = { Text("果冻 Q 弹") }
+                )
+                FilterChip(
+                    selected = animMode == MascotAnimMode.MOUTH,
+                    enabled = !mouthUri.isNullOrBlank(),
+                    onClick = {
+                        animMode = MascotAnimMode.MOUTH
+                        prefs.edit().putString(MascotPrefs.KEY_ANIM_MODE, animMode.value).commit()
+                        if (enabled) MascotService.notifySettingsChanged(context)
+                    },
+                    label = { Text("张口切换") }
+                )
+            }
+            if (mouthUri.isNullOrBlank()) {
+                Text(
+                    "先选择一张「张口差分」图片，才能使用张口切换",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            SettingSwitchItem(
+                title = "点击时 Q 弹",
+                subtitle = "点击角色时也弹一下",
+                checked = clickJelly,
+                onCheckedChange = {
+                    clickJelly = it
+                    prefs.edit().putBoolean(MascotPrefs.KEY_CLICK_JELLY, it).commit()
+                    if (enabled) MascotService.notifySettingsChanged(context)
+                }
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { previewSpeech = !previewSpeech },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (previewSpeech) "停止预览动画" else "预览对话动画")
+            }
+            Text(
+                "GIF 动态图需要 Android 9 及以上才能播放；更老的系统只显示第一帧。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
         HorizontalDivider()

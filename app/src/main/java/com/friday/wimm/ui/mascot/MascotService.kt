@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -75,6 +76,29 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var windowParams: WindowManager.LayoutParams? = null
     private var _scale by mutableFloatStateOf(1.0f)
     private val scale: Float get() = _scale
+
+    // ── 形象外观（跨进程通过广播刷新） ──────────────────────
+    private var _style by mutableStateOf(MascotStyle.BUILTIN)
+    private var _imageUri by mutableStateOf<String?>(null)
+    private var _mouthUri by mutableStateOf<String?>(null)
+    private var _animMode by mutableStateOf(MascotAnimMode.JELLY)
+    private var _clickJelly by mutableStateOf(true)
+
+    /** 选了"自定义"但还没挑图片时，回退到内置形象 */
+    private fun effectiveStyle(): MascotStyle =
+        if (_style == MascotStyle.CUSTOM && _imageUri.isNullOrBlank()) MascotStyle.BUILTIN else _style
+
+    private fun reloadAppearance() {
+        prefs.edit().commit()
+        _scale = prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f)
+        _style = MascotStyle.from(prefs.getString(MascotPrefs.KEY_STYLE, MascotStyle.BUILTIN.value))
+        _imageUri = prefs.getString(MascotPrefs.KEY_IMAGE_URI, null)
+        _mouthUri = prefs.getString(MascotPrefs.KEY_MOUTH_URI, null)
+        _animMode = MascotAnimMode.from(
+            prefs.getString(MascotPrefs.KEY_ANIM_MODE, MascotAnimMode.JELLY.value)
+        )
+        _clickJelly = prefs.getBoolean(MascotPrefs.KEY_CLICK_JELLY, true)
+    }
 
     private val prefs by lazy { getSharedPreferences(MascotPrefs.NAME, Context.MODE_MULTI_PROCESS) }
 
@@ -170,8 +194,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     }
                 }
                 ACTION_SETTINGS_CHANGED -> {
-                    prefs.edit().commit()
-                    _scale = prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f)
+                    reloadAppearance()
                     updateMascotSize(_scale)
                 }
             }
@@ -198,8 +221,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             registerReceiver(notificationReceiver, filter)
         }
 
-        prefs.edit().commit()
-        _scale = prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f)
+        reloadAppearance()
     }
 
     private var lastGreetingHour = -1
@@ -291,16 +313,17 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
 
         val currentScale = scale
-        val menuH = 300
-        val mascotAreaH = (BUBBLE_H + MASCOT_H) * currentScale
+        val box = MascotLayout.boxFor(effectiveStyle())
+        val menuH = MascotLayout.MENU_H
+        val mascotAreaH = (MascotLayout.BUBBLE_H + box.height.value) * currentScale
         val totalH = if (showMenu) mascotAreaH + menuH else mascotAreaH
 
         // 调整窗口大小（向下扩展，不改y）
-        LaunchedEffect(showMenu, currentScale) {
+        LaunchedEffect(showMenu, currentScale, box) {
             val view = composeView ?: return@LaunchedEffect
             val params = windowParams ?: return@LaunchedEffect
             val density = resources.displayMetrics.density
-            val winW = maxOf(MASCOT_W * currentScale, 220f)
+            val winW = maxOf(box.width.value * currentScale, MascotLayout.MENU_W)
             params.width = (winW * density).toInt()
             params.height = (totalH * density).toInt()
             try {
@@ -308,7 +331,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             } catch (_: Exception) {}
         }
 
-        val containerW = maxOf(MASCOT_W * currentScale, 220f)
+        val containerW = maxOf(box.width.value * currentScale, MascotLayout.MENU_W)
         Box(
             modifier = Modifier.size(containerW.dp, totalH.dp)
         ) {
@@ -316,7 +339,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             if (mascotState.speechText != null) {
                 Box(
                     modifier = Modifier
-                        .size((MASCOT_W * currentScale).dp, (BUBBLE_H * currentScale).dp)
+                        .size((box.width.value * currentScale).dp, (MascotLayout.BUBBLE_H * currentScale).dp)
                         .align(Alignment.TopCenter),
                     contentAlignment = Alignment.Center
                 ) {
@@ -341,9 +364,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             // 桌宠区域（中间）+ 交互层
             Box(
                 modifier = Modifier
-                    .size((MASCOT_W * currentScale).dp, (MASCOT_H * currentScale).dp)
+                    .size((box.width.value * currentScale).dp, (box.height.value * currentScale).dp)
                     .align(Alignment.TopCenter)
-                    .offset(y = (BUBBLE_H * currentScale).dp)
+                    .offset(y = (MascotLayout.BUBBLE_H * currentScale).dp)
                     .pointerInput(currentScale) {
                         awaitPointerEventScope {
                             while (true) {
@@ -442,10 +465,22 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     },
                 contentAlignment = Alignment.BottomCenter
             ) {
-                FlyingBillMascot(
-                    scale = currentScale,
-                    state = mascotState
-                )
+                when (effectiveStyle()) {
+                    MascotStyle.BUILTIN -> FlyingBillMascot(
+                        scale = currentScale,
+                        state = mascotState
+                    )
+
+                    MascotStyle.CUSTOM -> CustomImageMascot(
+                        imageUri = _imageUri,
+                        mouthUri = _mouthUri,
+                        animMode = _animMode,
+                        clickJelly = _clickJelly,
+                        speechVisible = mascotState.speechText != null,
+                        clickTick = mascotState.clickTick,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
 
             // 快捷设置菜单（桌宠下方，固定大小不缩放）
@@ -554,6 +589,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     private fun onTap() {
+        // 自定义形象的点击 Q 弹反馈
+        mascotState.clickTick += 1
         val interactions = listOf(
             { triggerClickSpeech() },
             { triggerExcitedAnimation() },
@@ -903,8 +940,10 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val view = composeView ?: return
         val params = view.layoutParams as? WindowManager.LayoutParams ?: return
         val density = resources.displayMetrics.density
-        params.width = (MASCOT_W * density * scale).toInt()
-        params.height = ((MASCOT_H + BUBBLE_H) * density * scale).toInt()
+        val box = MascotLayout.boxFor(effectiveStyle())
+        val widthDp = maxOf(box.width.value * scale, MascotLayout.MENU_W)
+        params.width = (widthDp * density).toInt()
+        params.height = ((box.height.value + MascotLayout.BUBBLE_H) * density * scale).toInt()
         windowParams = params
         try {
             windowManager.updateViewLayout(view, params)
@@ -913,8 +952,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun createLayoutParams(scale: Float): WindowManager.LayoutParams {
         val density = resources.displayMetrics.density
-        val w = (MASCOT_W * density * scale).toInt()
-        val h = ((MASCOT_H + BUBBLE_H) * density * scale).toInt()
+        val box = MascotLayout.boxFor(effectiveStyle())
+        val w = (maxOf(box.width.value * scale, MascotLayout.MENU_W) * density).toInt()
+        val h = ((box.height.value + MascotLayout.BUBBLE_H) * density * scale).toInt()
         return WindowManager.LayoutParams(
             w, h,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)

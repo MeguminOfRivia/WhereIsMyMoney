@@ -15,6 +15,9 @@ class MascotStateHolder {
     var speechText by mutableStateOf<String?>(null)
     var animationState by mutableStateOf(AnimationState.IDLE)
     var showMenu by mutableStateOf(false)
+
+    /** 每次点击 +1，自定义形象据此触发 Q 弹反馈 */
+    var clickTick by mutableIntStateOf(0)
 }
 
 object MascotSpeech {
@@ -155,6 +158,13 @@ object MascotPrefs {
     const val KEY_EYE_TRACK = "mascot_eye_track"
     const val KEY_EYE_TRACK_PROB = "mascot_eye_track_prob"
 
+    // ── 自定义形象 ──────────────────────────────────────
+    const val KEY_STYLE = "mascot_style"
+    const val KEY_IMAGE_URI = "mascot_image_uri"
+    const val KEY_MOUTH_URI = "mascot_mouth_uri"
+    const val KEY_ANIM_MODE = "mascot_anim_mode"
+    const val KEY_CLICK_JELLY = "mascot_click_jelly"
+
     fun defaults() = mapOf(
         KEY_ENABLED to true,
         KEY_SCALE to 1.0f,
@@ -162,5 +172,8 @@ object MascotPrefs {
         KEY_SPEECH to true,
         KEY_EYE_TRACK to true,
         KEY_EYE_TRACK_PROB to 1.0f,
+        KEY_STYLE to MascotStyle.BUILTIN.value,
+        KEY_ANIM_MODE to MascotAnimMode.JELLY.value,
+        KEY_CLICK_JELLY to true,
     )
 }

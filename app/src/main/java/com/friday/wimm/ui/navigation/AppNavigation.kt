@@ -51,9 +51,11 @@ fun AppNavigation() {
             createDefaultGlobalCard(context)
         })
     } else {
-        // 确保全局卡片存在
+        // 确保全局卡片存在（数据库操作放到 IO 线程，避免启动时卡顿）
         LaunchedEffect(Unit) {
-            createDefaultGlobalCard(context)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                createDefaultGlobalCard(context)
+            }
         }
         MainContent()
     }

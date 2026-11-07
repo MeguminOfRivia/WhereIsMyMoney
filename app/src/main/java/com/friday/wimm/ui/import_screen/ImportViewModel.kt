@@ -32,10 +32,13 @@ class ImportViewModel(private val repository: TransactionRepository) : ViewModel
                         return@launch
                     }
 
-                    val transactions = if (fileName.endsWith(".xlsx", ignoreCase = true)) {
-                        XLSXParser.parse(inputStream)
-                    } else {
-                        CSVParser.parse(inputStream)
+                    // Apache POI 解析大文件非常重，必须离开主线程，否则界面会卡死/ANR
+                    val transactions = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        if (fileName.endsWith(".xlsx", ignoreCase = true)) {
+                            XLSXParser.parse(inputStream)
+                        } else {
+                            CSVParser.parse(inputStream)
+                        }
                     }
                     inputStream.close()
 

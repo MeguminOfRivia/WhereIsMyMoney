@@ -2,6 +2,7 @@ package com.friday.wimm.ui.cards
 
 import android.app.DatePickerDialog
 import androidx.activity.compose.BackHandler
+import kotlinx.coroutines.launch
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -210,8 +211,13 @@ fun CreateCardScreen(
                         endTime = if (hasEndTime) endTime else 0,
                         isGlobal = false
                     )
-                    cardRepository.insertCard(card)
-                    onCreated()
+                    // 写库放到 IO 线程，写完再回主线程跳转
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        cardRepository.insertCard(card)
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            onCreated()
+                        }
+                    }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)

@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.clickable
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -45,9 +46,11 @@ fun CardsScreen(
     // 动画状态 - 页面整体渐显
     var pageVisible by remember { mutableStateOf(false) }
 
-    // 加载卡片
+    // 加载卡片（数据库读取放在 IO 线程）
     LaunchedEffect(Unit) {
-        cards = cardRepository.getAllCards()
+        cards = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            cardRepository.getAllCards()
+        }
         isLoading = false
         kotlinx.coroutines.delay(50)
         pageVisible = true
@@ -130,9 +133,15 @@ fun CardsScreen(
             text = { Text("确定要删除卡片「${card.name}」吗？删除后无法恢复。") },
             confirmButton = {
                 TextButton(onClick = {
-                    cardRepository.deleteCard(card.id)
-                    cards = cardRepository.getAllCards()
-                    showDeleteDialog = null
+                    // 数据库操作放到 IO 线程
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        cardRepository.deleteCard(card.id)
+                        val refreshed = cardRepository.getAllCards()
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            cards = refreshed
+                            showDeleteDialog = null
+                        }
+                    }
                 }) {
                     Text("删除", color = MaterialTheme.colorScheme.error)
                 }

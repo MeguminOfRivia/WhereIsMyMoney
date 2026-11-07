@@ -60,9 +60,11 @@ fun CardDetailScreen(
         label = "contentOffsetY"
     )
 
-    // 加载统计数据
+    // 加载统计数据（数据库聚合放到 IO 线程）
     LaunchedEffect(card.id) {
-        statistics = cardRepository.getCardStatistics(card)
+        statistics = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            cardRepository.getCardStatistics(card)
+        }
         isLoading = false
         contentVisible = true
     }

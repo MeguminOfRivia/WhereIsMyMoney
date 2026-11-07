@@ -16,4 +16,12 @@ object Money {
     fun format(amount: Double): String = String.format(Locale.US, "%.2f", amount)
 
     fun formatWithSymbol(amount: Double): String = "¥" + format(amount)
+
+    /** 元 → 整数分（四舍五入），所有金额累加都应该先转成这个再相加 */
+    fun toCents(amount: Double): Long = Math.round(amount * 100.0)
+
+    /** 整数分 → 元（仅用于显示） */
+    fun fromCents(cents: Long): Double = cents / 100.0
+
+    fun formatCents(cents: Long): String = format(fromCents(cents))
 }

@@ -10,6 +10,7 @@ import com.friday.wimm.data.model.CardMerchantCategory
 import com.friday.wimm.data.model.Category
 import com.friday.wimm.data.model.MerchantCategory
 import com.friday.wimm.data.model.Transaction
+import com.friday.wimm.util.Money
 
 class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -173,7 +174,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     fun insertTransaction(transaction: Transaction): Long {
         val db = writableDatabase
         val values = ContentValues().apply {
-            put("amount", transaction.amount)
+            put("amount", Money.toCents(transaction.amount) / 100.0)
             put("merchant", transaction.merchant)
             put("categoryId", transaction.categoryId)
             put("source", transaction.source)
@@ -197,7 +198,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     fun insertTransactionDedup(transaction: Transaction): InsertResult {
         val db = writableDatabase
         val values = ContentValues().apply {
-            put("amount", transaction.amount)
+            put("amount", Money.toCents(transaction.amount) / 100.0)
             put("merchant", transaction.merchant)
             put("categoryId", transaction.categoryId)
             put("source", transaction.source)
@@ -317,7 +318,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
                 }
 
                 val values = ContentValues().apply {
-                    put("amount", transaction.amount)
+                    put("amount", Money.toCents(transaction.amount) / 100.0)
                     put("merchant", transaction.merchant)
                     put("categoryId", transaction.categoryId)
                     put("source", transaction.source)
@@ -341,7 +342,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     fun updateTransactionAmount(id: Long, amount: Double) {
         val db = writableDatabase
         val values = ContentValues().apply {
-            put("amount", amount)
+            put("amount", Money.toCents(amount) / 100.0)
         }
         db.update("transactions", values, "id = ?", arrayOf(id.toString()))
     }
@@ -468,7 +469,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         val totals = mutableListOf<MerchantTotal>()
         val db = readableDatabase
         val cursor = db.rawQuery(
-            "SELECT merchant, SUM(amount) as total, type FROM transactions GROUP BY merchant, type ORDER BY total DESC",
+            "SELECT merchant, SUM(ROUND(amount * 100)) / 100.0 as total, type " +
+                "FROM transactions GROUP BY merchant, type ORDER BY total DESC",
             null
         )
 
@@ -489,8 +491,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     fun getTotalAmount(): Pair<Double, Double> {
         val db = readableDatabase
         val cursor = db.rawQuery(
-            "SELECT SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as totalExpense, " +
-            "SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as totalIncome FROM transactions",
+            "SELECT SUM(CASE WHEN type = 'expense' THEN ROUND(amount * 100) ELSE 0 END) / 100.0 as totalExpense, " +
+                "SUM(CASE WHEN type = 'income' THEN ROUND(amount * 100) ELSE 0 END) / 100.0 as totalIncome FROM transactions",
             null
         )
         var totalExpense = 0.0

@@ -4,6 +4,10 @@ import com.friday.wimm.data.database.DatabaseHelper
 import com.friday.wimm.data.model.Card
 import com.friday.wimm.data.model.CardCategory
 import com.friday.wimm.data.model.Transaction
+import com.friday.wimm.util.Money
+
+/** 金额必须按「分」累加，否则浮点数会累积误差 */
+private fun List<Transaction>.sumCents(): Long = sumOf { Money.toCents(it.amount) }
 
 class CardRepository(private val dbHelper: DatabaseHelper) {
 
@@ -44,8 +48,8 @@ class CardRepository(private val dbHelper: DatabaseHelper) {
         val expenseTransactions = transactions.filter { it.type == "expense" }
         val incomeTransactions = transactions.filter { it.type == "income" }
 
-        val totalExpense = expenseTransactions.sumOf { it.amount }
-        val totalIncome = incomeTransactions.sumOf { it.amount }
+        val totalExpense = Money.fromCents(expenseTransactions.sumCents())
+        val totalIncome = Money.fromCents(incomeTransactions.sumCents())
         val expenseCount = expenseTransactions.size
         val incomeCount = incomeTransactions.size
 
@@ -55,8 +59,8 @@ class CardRepository(private val dbHelper: DatabaseHelper) {
                 val byType = txs.groupBy { it.type }
                 MerchantSummary(
                     merchant = merchant,
-                    expenseTotal = byType["expense"]?.sumOf { it.amount } ?: 0.0,
-                    incomeTotal = byType["income"]?.sumOf { it.amount } ?: 0.0,
+                    expenseTotal = Money.fromCents(byType["expense"]?.sumCents() ?: 0L),
+                    incomeTotal = Money.fromCents(byType["income"]?.sumCents() ?: 0L),
                     expenseCount = byType["expense"]?.size ?: 0,
                     incomeCount = byType["income"]?.size ?: 0,
                     lastTimestamp = txs.maxOfOrNull { it.timestamp } ?: 0L
@@ -69,8 +73,12 @@ class CardRepository(private val dbHelper: DatabaseHelper) {
             categories.map { category ->
                 val merchants = getCardMerchantsByCategory(card.id, category.id)
                 val categoryTransactions = transactions.filter { it.merchant in merchants }
-                val categoryExpense = categoryTransactions.filter { it.type == "expense" }.sumOf { it.amount }
-                val categoryIncome = categoryTransactions.filter { it.type == "income" }.sumOf { it.amount }
+                val categoryExpense = Money.fromCents(
+                    categoryTransactions.filter { it.type == "expense" }.sumCents()
+                )
+                val categoryIncome = Money.fromCents(
+                    categoryTransactions.filter { it.type == "income" }.sumCents()
+                )
                 CategoryStatistics(
                     category = category,
                     expenseTotal = categoryExpense,

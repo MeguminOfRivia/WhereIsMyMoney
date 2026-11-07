@@ -63,8 +63,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
     
-    // 图表库
-    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0")
+    // 图表：本项目一直用 Canvas 自绘，MPAndroidChart 从未被引用，已移除（省约 1MB）
     
     // Excel 解析库 (Apache POI)
     implementation("org.apache.poi:poi:5.2.5") {

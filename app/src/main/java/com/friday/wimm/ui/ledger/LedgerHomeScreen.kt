@@ -58,6 +58,7 @@ import com.friday.wimm.data.model.Account
 import com.friday.wimm.data.model.Category
 import com.friday.wimm.data.model.LedgerEntry
 import com.friday.wimm.data.model.LedgerSums
+import com.friday.wimm.ui.components.WimmProgressBar
 import com.friday.wimm.util.BudgetMath
 import com.friday.wimm.util.Money
 import kotlinx.coroutines.Dispatchers
@@ -345,7 +346,7 @@ private fun BudgetStrip(snapshot: BudgetSnapshot, modifier: Modifier = Modifier)
                 Column {
                     Text("今天还能花", style = MaterialTheme.typography.bodySmall)
                     Text(
-                        "¥${Money.formatCents(todayRemaining)}",
+                        Money.formatSignedCents(todayRemaining),
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (overToday) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
@@ -354,7 +355,7 @@ private fun BudgetStrip(snapshot: BudgetSnapshot, modifier: Modifier = Modifier)
                 Column(horizontalAlignment = Alignment.End) {
                     Text("本月还剩", style = MaterialTheme.typography.bodySmall)
                     Text(
-                        "¥${Money.formatCents(snapshot.totalRemainingCents)}",
+                        Money.formatSignedCents(snapshot.totalRemainingCents),
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (snapshot.isOverBudget) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
@@ -362,21 +363,24 @@ private fun BudgetStrip(snapshot: BudgetSnapshot, modifier: Modifier = Modifier)
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
-            LinearProgressIndicator(
-                progress = { snapshot.monthProgress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(CircleShape),
+            WimmProgressBar(
+                progress = snapshot.monthProgress,
                 color = if (snapshot.isOverBudget) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.surface
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "已花 ¥${Money.formatCents(snapshot.totalSpentCents)} / 可用 ¥${Money.formatCents(snapshot.totalAvailableCents)}",
+                "预算内已花 ${Money.formatSignedCents(snapshot.totalSpentCents)} / 可用 ${Money.formatSignedCents(snapshot.totalAvailableCents)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (snapshot.totalUnbudgetedCents > 0) {
+                Text(
+                    "另有 ${Money.formatSignedCents(snapshot.totalUnbudgetedCents)} 不在预算里",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

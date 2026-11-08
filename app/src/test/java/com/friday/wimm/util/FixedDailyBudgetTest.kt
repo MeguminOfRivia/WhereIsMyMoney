@@ -105,4 +105,12 @@ class FixedDailyBudgetTest {
         assertEquals(1, plan.daysInMonth)
         assertTrue(plan.baseCents > 0)
     }
+
+    @Test
+    fun `汇总今日额度不会被子分类的负额度抵掉`() {
+        // 一个分类超支（负额度）不该把另一个分类今天的钱吃掉
+        assertEquals(3_000, BudgetMath.sumPositive(listOf(-500, 3_000, 0)))
+        assertEquals(0, BudgetMath.sumPositive(listOf(-1, -2)))
+        assertEquals(0, BudgetMath.sumPositive(emptyList()))
+    }
 }

@@ -25,6 +25,17 @@ object Money {
 
     fun formatCents(cents: Long): String = format(fromCents(cents))
 
+    /** 带千分位和货币符号：¥1,234.56；负数写成 -¥1,234.56（负号在 ¥ 前面） */
+    fun formatSignedCents(cents: Long): String {
+        val sign = if (cents < 0) "-" else ""
+        val absolute = if (cents == Long.MIN_VALUE) Long.MAX_VALUE else kotlin.math.abs(cents)
+        return sign + "¥" + String.format(Locale.US, "%,.2f", absolute / 100.0)
+    }
+
+    /** 只带千分位、不带符号：1,234.56 */
+    fun formatGrouped(cents: Long): String =
+        String.format(Locale.US, "%,.2f", cents / 100.0)
+
     /**
      * 把用户输入的一串字符解析成「分」。
      *

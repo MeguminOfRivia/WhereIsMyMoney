@@ -56,6 +56,7 @@ data class BudgetPanelData(
     val monthRemainingCents: Long,
     val carryInCents: Long,
     val adjustCents: Long,
+    val unbudgetedCents: Long,
     val topToday: CategoryLine?,
     val topMonth: List<CategoryLine>
 ) {
@@ -95,6 +96,7 @@ fun loadBudgetPanelData(financeDao: FinanceDao, ledgerDao: LedgerDao): BudgetPan
         monthRemainingCents = snapshot.totalRemainingCents,
         carryInCents = snapshot.totalCarryInCents,
         adjustCents = snapshot.totalAdjustCents,
+        unbudgetedCents = snapshot.totalUnbudgetedCents,
         topToday = todayBreakdown.firstOrNull()?.let { CategoryLine(it.name, it.cents) },
         topMonth = monthBreakdown.take(3).map { CategoryLine(it.name, it.cents) }
     )
@@ -204,7 +206,7 @@ private fun TodaySection(data: BudgetPanelData) {
     )
     Spacer(modifier = Modifier.height(3.dp))
     Text(
-        "已花 ¥${Money.formatCents(data.todaySpentCents)} / 今日额度 ¥${Money.formatCents(data.todayLimitCents)}",
+        "已花 ¥${Money.formatCents(data.todaySpentCents)} / 今日可用 ¥${Money.formatCents(data.todayLimitCents)}",
         fontSize = 10.sp,
         color = PanelSub
     )
@@ -261,6 +263,15 @@ private fun MonthSection(data: BudgetPanelData) {
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             "含结转 ¥${Money.formatCents(data.carryInCents)}，手动调整 ¥${Money.formatCents(data.adjustCents)}",
+            fontSize = 9.sp,
+            color = PanelSub,
+            maxLines = 1
+        )
+    }
+    if (data.unbudgetedCents > 0L) {
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            "预算外支出 ¥${Money.formatCents(data.unbudgetedCents)}",
             fontSize = 9.sp,
             color = PanelSub,
             maxLines = 1

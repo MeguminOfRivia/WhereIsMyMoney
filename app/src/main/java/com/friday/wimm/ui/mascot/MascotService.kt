@@ -123,6 +123,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     /** 是否正在拖拽：拖拽期间禁止其它地方改窗口位置，否则会跟手指抢 */
     private var windowDragging = false
 
+    /** 最后一次用户碰它的时间：随机移动/自动动画要在这之后安静几秒 */
+    private var lastUserTouchAt = 0L
+
     /** 贴边动画的 Job：开始拖拽时要先取消，不然会跟手指抢 */
     private var windowAnimJob: Job? = null
 
@@ -620,6 +623,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                 if (!downChange.pressed) continue
                                 // 保险：上一次手势如果没收尾，这里重置
                                 windowDragging = false
+                                // 用户一碰，随机移动/自动走路就先安静 5 秒
+                                lastUserTouchAt = System.currentTimeMillis()
 
                                 val downTime = System.currentTimeMillis()
                                 var totalDragDist = 0f
@@ -1011,6 +1016,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 delay(Random.nextLong(15000, 35000))
                 if (!isRandomMoveEnabled()) continue
                 if (mascotState.isDizzy) continue
+                // 用户正在拖 / 刚松手 5 秒内，绝对不要自己乱跑，否则就是在跟手指抢
+                if (windowDragging) continue
+                if (System.currentTimeMillis() - lastUserTouchAt < 5_000L) continue
 
                 val params = windowParams ?: continue
                 val displayMetrics = resources.displayMetrics
@@ -1046,6 +1054,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private suspend fun animateMoveBezier(fromX: Int, fromY: Int, midX: Int, midY: Int, toX: Int, toY: Int) {
         val totalSteps = 90
         for (i in 1..totalSteps) {
+            // 用户一碰，这个自动动画立刻让位
+            if (windowDragging || System.currentTimeMillis() - lastUserTouchAt < 1_000L) return
             val params = windowParams ?: return
             val t = i.toFloat() / totalSteps
             val eased = t * t * (3f - 2f * t)

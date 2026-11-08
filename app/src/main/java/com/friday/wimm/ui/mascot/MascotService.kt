@@ -268,6 +268,15 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
         /** 离边框多近就吸附（dp）：做得很小，只有主动拖到边上才会吸 */
         private const val SNAP_THRESHOLD_DP = 56f
+
+        /** 气泡最小高度（dp）：形象再小，气泡也要能看清两行字 */
+        private const val MIN_BUBBLE_H = 54f
+
+        /** 气泡最小宽度（dp） */
+        private const val MIN_BUBBLE_W = 156f
+
+        /** 气泡文字最小字号（sp） */
+        private const val MIN_BUBBLE_FONT = 11f
         /** 两次抬手间隔小于这个值就算双击 */
         private const val DOUBLE_TAP_WINDOW_MS = 280L
 
@@ -506,7 +515,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val mascotH = box.height.value * currentScale
         // 回滚到原来的布局：上方永远留一条气泡位，窗口尺寸只随「有没有预算面板」变化，
         // 不再根据说话/贴边动态伸缩——之前拖动乱飞就是这套动态布局引起的。
-        val bubbleH = MascotLayout.BUBBLE_H * currentScale
+        // 气泡高度有下限：形象缩到很小时，气泡仍然要保持能看清字的大小。
+        // 这条预留区永远存在（不管现在有没有说话），所以形象不会因为气泡出现而上下跳。
+        val bubbleH = maxOf(MascotLayout.BUBBLE_H * currentScale, MIN_BUBBLE_H)
         val panelH = if (panel != null) MascotLayout.BUDGET_PANEL_H else 0f
         val totalH = bubbleH + mascotH + panelH
         val mascotY = bubbleH
@@ -526,9 +537,23 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             val params = windowParams ?: return@LaunchedEffect
             if (windowDragging) return@LaunchedEffect
             val density = resources.displayMetrics.density
+            val screenW = resources.displayMetrics.widthPixels
             val screenH = resources.displayMetrics.heightPixels
-            params.width = (windowWidthDp(box, currentScale, panel != null) * density).toInt()
-            params.height = (totalH * density).toInt()
+            val newWidth = (windowWidthDp(box, currentScale, panel != null) * density).toInt()
+            val newHeight = (totalH * density).toInt()
+            // 只有尺寸真的变了才重新贴边（弹出/收起预算面板）。
+            // 如果每次重组都无条件把 x 顶回边框，拖动就会被按死在边上动不了。
+            val widthChanged = newWidth != params.width
+            params.width = newWidth
+            params.height = newHeight
+            if (widthChanged) {
+                when (_side) {
+                    MascotSide.LEFT -> params.x = 0
+                    MascotSide.RIGHT -> params.x = screenW - newWidth
+                    MascotSide.NONE -> params.x =
+                        params.x.coerceIn(0, (screenW - newWidth).coerceAtLeast(0))
+                }
+            }
             // 展开面板后别越过屏幕下沿
             if (params.y + params.height > screenH - 8) {
                 params.y = (screenH - params.height - 8).coerceAtLeast(0)
@@ -544,25 +569,27 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         ) {
             // 气泡（固定在形象上方，和回滚前的版本一致）
             if (mascotState.speechText != null) {
+                val bubbleW = maxOf(mascotW, MIN_BUBBLE_W).coerceAtMost(containerW)
+                val fontSp = maxOf(13 * currentScale, MIN_BUBBLE_FONT)
                 Box(
                     modifier = Modifier
-                        .size(mascotW.dp, bubbleH.dp)
+                        .size(bubbleW.dp, bubbleH.dp)
                         .align(contentAlign),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
                         modifier = Modifier
-                            .padding(horizontal = (6 * currentScale).dp, vertical = (4 * currentScale).dp)
-                            .background(BubbleBg, RoundedCornerShape((12 * currentScale).dp))
-                            .padding(horizontal = (10 * currentScale).dp, vertical = (6 * currentScale).dp),
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .background(BubbleBg, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = mascotState.speechText!!,
-                            fontSize = (13 * currentScale).sp,
+                            fontSize = fontSp.sp,
                             color = BubbleText,
                             maxLines = 2,
-                            lineHeight = (18 * currentScale).sp
+                            lineHeight = (fontSp * 1.35f).sp
                         )
                     }
                 }
@@ -1102,7 +1129,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val density = resources.displayMetrics.density
         val screenW = resources.displayMetrics.widthPixels
         val box = MascotLayout.boxFor(effectiveStyle())
-        val bubbleH = MascotLayout.BUBBLE_H * scale
+        val bubbleH = maxOf(MascotLayout.BUBBLE_H * scale, MIN_BUBBLE_H)
         val panelH = if (_panel != null) MascotLayout.BUDGET_PANEL_H else 0f
         params.width = (windowWidthDp(box, scale, _panel != null) * density).toInt()
         params.height = ((box.height.value * scale + bubbleH + panelH) * density).toInt()
@@ -1133,7 +1160,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val density = resources.displayMetrics.density
         val box = MascotLayout.boxFor(effectiveStyle())
         val w = (windowWidthDp(box, scale, false) * density).toInt()
-        val h = ((box.height.value + MascotLayout.BUBBLE_H) * density * scale).toInt()
+        val h = ((box.height.value * scale + maxOf(MascotLayout.BUBBLE_H * scale, MIN_BUBBLE_H)) * density).toInt()
         return WindowManager.LayoutParams(
             w, h,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)

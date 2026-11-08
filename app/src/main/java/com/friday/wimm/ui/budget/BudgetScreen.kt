@@ -319,9 +319,11 @@ private fun OverviewCard(snap: BudgetSnapshot) {
             )
             Spacer(modifier = Modifier.height(4.dp))
             WimmProgressBar(
-                progress = snap.monthProgress,
-                color = if (snap.isOverBudget) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surface
+                progress = snap.monthProgress.coerceAtMost(1f),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surface,
+                overProgress = snap.monthOverProgress,
+                savedProgress = snap.monthSavedProgress
             )
 
             if (snap.isCurrentMonth) {
@@ -335,12 +337,10 @@ private fun OverviewCard(snap: BudgetSnapshot) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 WimmProgressBar(
-                    progress = snap.dayProgress,
-                    color = if (snap.totalTodayRemainingCents < 0) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.tertiary
-                    },
+                    progress = snap.dayProgress.coerceAtMost(1f),
+                    color = MaterialTheme.colorScheme.tertiary,
+                    overProgress = snap.dayOverProgress,
+                    savedProgress = snap.daySavedProgress,
                     trackColor = MaterialTheme.colorScheme.surface,
                     height = 6.dp
                 )
@@ -457,9 +457,11 @@ private fun BudgetCard(
             )
             Spacer(modifier = Modifier.height(4.dp))
             WimmProgressBar(
-                progress = row.monthProgress,
-                color = if (row.isOverBudget) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surface
+                progress = row.monthProgress.coerceAtMost(1f),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surface,
+                overProgress = row.monthOverProgress,
+                savedProgress = row.monthSavedProgress
             )
 
             // 每日进度（只在本月显示）
@@ -473,12 +475,10 @@ private fun BudgetCard(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 WimmProgressBar(
-                    progress = row.dayProgress,
-                    color = if (row.isOverToday) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.tertiary
-                    },
+                    progress = row.dayProgress.coerceAtMost(1f),
+                    color = MaterialTheme.colorScheme.tertiary,
+                    overProgress = row.dayOverProgress,
+                    savedProgress = row.daySavedProgress,
                     trackColor = MaterialTheme.colorScheme.surface,
                     height = 6.dp
                 )

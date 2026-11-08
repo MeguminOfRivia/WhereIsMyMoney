@@ -62,6 +62,39 @@ data class CategoryBudgetState(
 
     val isOverBudget: Boolean get() = remainingCents < 0L
     val isOverToday: Boolean get() = isCurrentMonth && todayRemainingCents < 0L
+
+    /** 超出本月预算的比例（相对可用额度）：超一倍 = 1f，进度条会画成一半红一半原色 */
+    val monthOverProgress: Float
+        get() = if (availableCents <= 0L || spentCents <= availableCents) 0f
+        else (spentCents - availableCents).toFloat() / availableCents.toFloat()
+
+    /** 这个月已经省下、能滚到明天的额度占可用额度的比例（蓝色部分） */
+    val monthSavedProgress: Float
+        get() {
+            if (isOverBudget || availableCents <= 0L || !isCurrentMonth) return 0f
+            val saved = savedCents
+            return if (saved <= 0L) 0f else saved.toFloat() / availableCents.toFloat()
+        }
+
+    /** 「省下来的额度」= 从预算开始到今天应得的额度 − 已经花掉的额度 */
+    val savedCents: Long
+        get() {
+            if (!isCurrentMonth) return 0L
+            val allowance = dailyLimitCents + todaySpentCents
+            return (allowance - spentCents).coerceAtLeast(0L)
+        }
+
+    /** 今天超出今日额度的比例 */
+    val dayOverProgress: Float
+        get() = if (dailyLimitCents <= 0L || todaySpentCents <= dailyLimitCents) 0f
+        else (todaySpentCents - dailyLimitCents).toFloat() / dailyLimitCents.toFloat()
+
+    /** 今天省下来的额度占今日额度的比例 */
+    val daySavedProgress: Float
+        get() {
+            if (dailyLimitCents <= 0L || todaySpentCents >= dailyLimitCents) return 0f
+            return (dailyLimitCents - todaySpentCents).toFloat() / dailyLimitCents.toFloat()
+        }
 }
 
 /**
@@ -113,6 +146,30 @@ data class BudgetSnapshot(
         }
 
     val isOverBudget: Boolean get() = totalRemainingCents < 0L
+
+    val monthOverProgress: Float
+        get() = if (totalAvailableCents <= 0L || totalSpentCents <= totalAvailableCents) 0f
+        else (totalSpentCents - totalAvailableCents).toFloat() / totalAvailableCents.toFloat()
+
+    val monthSavedProgress: Float
+        get() {
+            if (isOverBudget || totalAvailableCents <= 0L || !isCurrentMonth) return 0f
+            return if (totalSavedCents <= 0L) 0f else totalSavedCents.toFloat() / totalAvailableCents.toFloat()
+        }
+
+    /** 各分类省下来的额度合计 */
+    val totalSavedCents: Long
+        get() = rows.sumOf { it.savedCents }
+
+    val dayOverProgress: Float
+        get() = if (totalDailyLimitCents <= 0L || totalTodaySpentCents <= totalDailyLimitCents) 0f
+        else (totalTodaySpentCents - totalDailyLimitCents).toFloat() / totalDailyLimitCents.toFloat()
+
+    val daySavedProgress: Float
+        get() {
+            if (totalDailyLimitCents <= 0L || totalTodaySpentCents >= totalDailyLimitCents) return 0f
+            return (totalDailyLimitCents - totalTodaySpentCents).toFloat() / totalDailyLimitCents.toFloat()
+        }
 }
 
 /**

@@ -49,7 +49,10 @@ data class CategoryLine(val name: String, val cents: Long)
 data class BudgetPanelData(
     val period: String,
     val hasBudget: Boolean,
+    /** 预算内已花（和 App 预算页同口径） */
     val todaySpentCents: Long,
+    /** 今天所有支出（含没有预算的大类），只用于额外提示 */
+    val todayAllSpentCents: Long,
     val todayLimitCents: Long,
     val monthSpentCents: Long,
     val monthAvailableCents: Long,
@@ -61,6 +64,9 @@ data class BudgetPanelData(
     val topMonth: List<CategoryLine>
 ) {
     val todayRemainingCents: Long get() = todayLimitCents - todaySpentCents
+
+    /** 今日预算外支出（不在任何分类预算里的钱） */
+    val todayUnbudgetedCents: Long get() = (todayAllSpentCents - todaySpentCents).coerceAtLeast(0L)
     val todayProgress: Float
         get() = if (todayLimitCents <= 0L) {
             if (todaySpentCents > 0L) 1f else 0f
@@ -89,7 +95,8 @@ fun loadBudgetPanelData(financeDao: FinanceDao, ledgerDao: LedgerDao): BudgetPan
     return BudgetPanelData(
         period = period,
         hasBudget = snapshot.hasBudget,
-        todaySpentCents = todayBreakdown.sumOf { it.cents },
+        todaySpentCents = snapshot.totalTodaySpentCents,
+        todayAllSpentCents = todayBreakdown.sumOf { it.cents },
         todayLimitCents = snapshot.totalDailyLimitCents,
         monthSpentCents = snapshot.totalSpentCents,
         monthAvailableCents = snapshot.totalAvailableCents,
@@ -210,6 +217,15 @@ private fun TodaySection(data: BudgetPanelData) {
         fontSize = 10.sp,
         color = PanelSub
     )
+    if (data.todayUnbudgetedCents > 0L) {
+        Spacer(modifier = Modifier.height(3.dp))
+        Text(
+            "另有 ¥${Money.formatCents(data.todayUnbudgetedCents)} 不在分类预算里",
+            fontSize = 10.sp,
+            color = PanelSub,
+            maxLines = 1
+        )
+    }
     data.topToday?.let {
         Spacer(modifier = Modifier.height(4.dp))
         Text(

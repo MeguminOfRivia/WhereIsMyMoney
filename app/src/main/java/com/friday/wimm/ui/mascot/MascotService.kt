@@ -1148,11 +1148,15 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     /**
-     * 窗口宽度（dp）：回滚到原来的算法——宽度足够放快捷菜单/预算面板，形象居中。
+     * 窗口宽度（dp）。
+     *
+     * 关键是**窗口不要比内容宽太多**：悬浮窗会整块吃掉触摸事件，
+     * 窗口里空着的地方用户点下去就"没反应"（按钮在下层按不动）。
+     * 所以宽度只取「形象宽度 / 气泡最小宽度」的较大者，弹出预算面板时才临时加宽。
      */
     private fun windowWidthDp(box: MascotBox, scale: Float, panelVisible: Boolean): Float {
         val mascotW = box.width.value * scale
-        val base = maxOf(mascotW, MascotLayout.MENU_W)
+        val base = maxOf(mascotW, MIN_BUBBLE_W)
         return if (panelVisible) maxOf(base, MascotLayout.BUDGET_PANEL_W) else base
     }
 

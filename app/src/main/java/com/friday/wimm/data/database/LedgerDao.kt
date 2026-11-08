@@ -263,6 +263,34 @@ class LedgerDao(private val helper: DatabaseHelper) {
 
     // ── 修改 ────────────────────────────────────────────────
 
+    /**
+     * 手动记一笔（首页右下角「+」用）。
+     *
+     * 和导入/通知的区别：不做去重、不分期，永远是一条新记录；
+     * 时间取调用方给的当前时间，`source` 记成 manual，方便以后区分来源。
+     */
+    fun insertManual(
+        amountCents: Long,
+        merchant: String,
+        note: String,
+        accountId: Long,
+        categoryId: Long?,
+        type: String,
+        timestamp: Long
+    ): Long = helper.insertTransaction(
+        com.friday.wimm.data.model.Transaction(
+            amount = amountCents / 100.0,
+            merchant = merchant,
+            categoryId = categoryId,
+            source = "manual",
+            timestamp = timestamp,
+            note = note,
+            type = type,
+            dataSource = "manual",
+            accountId = accountId
+        )
+    )
+
     fun updateEntry(
         id: Long,
         amountCents: Long? = null,

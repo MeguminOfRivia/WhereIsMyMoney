@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
@@ -26,6 +27,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -99,6 +101,8 @@ fun LedgerHomeScreen(refreshKey: Int = 0) {
     var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var editing by remember { mutableStateOf<LedgerEntry?>(null) }
+    // 右下角「+」：手动记一笔
+    var adding by remember { mutableStateOf(false) }
 
     val today = remember { LocalDate.now() }
     val period = remember { BudgetMath.periodOf(today) }
@@ -162,6 +166,12 @@ fun LedgerHomeScreen(refreshKey: Int = 0) {
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            // 手动记一笔：金额、收支、大类、账户、收款方、备注
+            FloatingActionButton(onClick = { adding = true }) {
+                Icon(Icons.Default.Add, contentDescription = "记一笔")
+            }
         }
     ) { padding ->
         LazyColumn(
@@ -279,6 +289,14 @@ fun LedgerHomeScreen(refreshKey: Int = 0) {
         TransactionEditSheet(
             entry = entry,
             onDismiss = { editing = null },
+            onChanged = { scope.launch { reload() } }
+        )
+    }
+
+    if (adding) {
+        TransactionEditSheet(
+            entry = null,
+            onDismiss = { adding = false },
             onChanged = { scope.launch { reload() } }
         )
     }

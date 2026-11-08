@@ -55,7 +55,7 @@ import androidx.compose.ui.platform.LocalContext
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransactionEditSheet(
-    entry: LedgerEntry,
+    entry: LedgerEntry?,
     onDismiss: () -> Unit,
     onChanged: () -> Unit
 ) {
@@ -64,13 +64,17 @@ fun TransactionEditSheet(
     val financeDao = app.financeDao
     val scope = rememberCoroutineScope()
 
-    val tx = entry.tx
-    var amountText by remember { mutableStateOf(Money.format(Money.fromCents(entry.amountCents))) }
-    var merchant by remember { mutableStateOf(tx.merchant) }
-    var note by remember { mutableStateOf(tx.note) }
-    var type by remember { mutableStateOf(if (tx.type == "income") "income" else "expense") }
-    var categoryId by remember { mutableStateOf(tx.categoryId) }
-    var accountId by remember { mutableStateOf(tx.accountId) }
+    // entry == null 表示「新增一笔」，否则是编辑已有流水
+    val isNew = entry == null
+    val tx = entry?.tx
+    var amountText by remember {
+        mutableStateOf(entry?.let { Money.format(Money.fromCents(it.amountCents)) } ?: "")
+    }
+    var merchant by remember { mutableStateOf(tx?.merchant ?: "") }
+    var note by remember { mutableStateOf(tx?.note ?: "") }
+    var type by remember { mutableStateOf(if (tx?.type == "income") "income" else "expense") }
+    var categoryId by remember { mutableStateOf(tx?.categoryId) }
+    var accountId by remember { mutableStateOf(tx?.accountId?.takeIf { it > 0 }) }
 
     var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var accounts by remember { mutableStateOf<List<Account>>(emptyList()) }
@@ -87,6 +91,8 @@ fun TransactionEditSheet(
             categoryId = null
         }
         accounts = withContext(Dispatchers.IO) { financeDao.getAllAccounts() }
+        // 新记一笔默认挂在第一个账户上，免得忘了选账户存成「未归属」
+        if (accountId == null) accountId = accounts.firstOrNull()?.id
     }
 
     fun save() {
@@ -95,25 +101,49 @@ fun TransactionEditSheet(
             errorText = "金额要填一个大于 0 的数字"
             return
         }
+        // 手动记一笔时收款方可以不填，默认就叫「手动记账」
         if (merchant.isBlank()) {
-            errorText = "收款方不能为空"
-            return
+            if (isNew) {
+                merchant = "手动记账"
+            } else {
+                errorText = "收款方不能为空"
+                return
+            }
         }
         errorText = null
+        if (isNew) {
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    ledgerDao.insertManual(
+                        amountCents = cents,
+                        merchant = merchant.trim(),
+                        note = note.trim(),
+                        accountId = accountId ?: 0L,
+                        categoryId = categoryId,
+                        type = type,
+                        timestamp = System.currentTimeMillis()
+                    )
+                }
+                onChanged()
+                onDismiss()
+            }
+            return
+        }
+        val editingTx = entry?.tx ?: return
         scope.launch {
             withContext(Dispatchers.IO) {
                 ledgerDao.updateEntry(
-                    id = tx.id,
+                    id = editingTx.id,
                     amountCents = cents,
                     merchant = merchant.trim(),
                     note = note.trim(),
                     accountId = accountId,
                     type = type
                 )
-                ledgerDao.updateCategory(tx.id, categoryId)
+                ledgerDao.updateCategory(editingTx.id, categoryId)
             }
             onChanged()
-            val categoryChanged = categoryId != tx.categoryId
+            val categoryChanged = categoryId != editingTx.categoryId
             if (categoryChanged && categoryId != null && !MerchantNames.isGeneric(merchant)) {
                 askRule = true
             } else {
@@ -130,9 +160,14 @@ fun TransactionEditSheet(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp)
         ) {
-            Text("编辑流水", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
-                entry.accountName + " · " + if (type == "income") "收入" else "支出",
+                if (isNew) "记一笔" else "编辑流水",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                (if (isNew) "手动记账" else entry!!.accountName) + " · " +
+                    if (type == "income") "收入" else "支出",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -202,10 +237,14 @@ fun TransactionEditSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = { save() }, modifier = Modifier.weight(1f)) { Text("保存") }
-                Spacer(modifier = Modifier.width(8.dp))
-                TextButton(onClick = { askDelete = true }) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
+                Button(onClick = { save() }, modifier = Modifier.weight(1f)) {
+                    Text(if (isNew) "记下来" else "保存")
+                }
+                if (!isNew) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(onClick = { askDelete = true }) {
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }
@@ -255,7 +294,7 @@ fun TransactionEditSheet(
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        withContext(Dispatchers.IO) { ledgerDao.deleteEntry(tx.id) }
+                        withContext(Dispatchers.IO) { tx?.let { ledgerDao.deleteEntry(it.id) } }
                         askDelete = false
                         onChanged()
                         onDismiss()

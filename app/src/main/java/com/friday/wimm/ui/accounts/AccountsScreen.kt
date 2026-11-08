@@ -1,4 +1,4 @@
-package com.friday.wimm.ui.accounts
+﻿package com.friday.wimm.ui.accounts
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -94,7 +94,7 @@ fun AccountsScreen(refreshKey: Int = 0) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("总资产", style = MaterialTheme.typography.bodySmall)
                     Text(
-                        "¥${Money.formatCents(totalCents)}",
+                        Money.formatSignedCents(totalCents),
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -217,14 +217,18 @@ private fun AccountCard(row: AccountRow, onClick: () -> Unit) {
                         MaterialTheme.colorScheme.onSurface
                     }
                 )
-                Text(
-                    Account.typeLabel(row.account.type),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // 账户名本来就等于类型名时（微信 / 支付宝），就不要重复显示两行了
+                val typeLabel = Account.typeLabel(row.account.type)
+                if (typeLabel != row.account.name) {
+                    Text(
+                        typeLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             Text(
-                "¥${Money.formatCents(row.balanceCents)}",
+                Money.formatSignedCents(row.balanceCents),
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = when {
@@ -310,7 +314,7 @@ private fun EditAccountDialog(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    "当前余额 ¥${Money.formatCents(row.balanceCents)}",
+                    "当前余额 " + Money.formatSignedCents(row.balanceCents),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

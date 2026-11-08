@@ -556,7 +556,7 @@ fun MascotScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = 
             Spacer(modifier = Modifier.height(12.dp))
             SettingSwitchItem(
                 title = "贴边吸附",
-                subtitle = "拖到屏幕边缘附近会自动贴边，左右切换时自动左右翻转",
+                subtitle = "只有拖到离边框很近（约 18dp）才会吸附，上、下、左、右都可以贴",
                 checked = snapEnabled,
                 onCheckedChange = {
                     snapEnabled = it
@@ -706,9 +706,9 @@ fun MascotScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = 
             Column(modifier = Modifier.padding(12.dp)) {
                 Text("操作提示", style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text("· 拖动 Wally 可以移动位置", style = MaterialTheme.typography.bodySmall)
+                Text("· 拖动 Wally 可以移动位置，拖到边缘会吸附（上下左右都行）", style = MaterialTheme.typography.bodySmall)
                 Text("· 点击 Wally 会触发互动", style = MaterialTheme.typography.bodySmall)
-                Text("· 长按 Wally 可以打开快捷设置", style = MaterialTheme.typography.bodySmall)
+                Text("· 双击 Wally 看今日预算，长按看本月预算", style = MaterialTheme.typography.bodySmall)
                 Text("· 快速拖动 Wally 会触发眩晕", style = MaterialTheme.typography.bodySmall)
                 Text("· 收到记账通知时 Wally 会说话", style = MaterialTheme.typography.bodySmall)
                 Text("· 待机时 Wally 会随机说话和变换动画", style = MaterialTheme.typography.bodySmall)

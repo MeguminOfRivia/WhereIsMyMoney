@@ -28,7 +28,9 @@ import com.friday.wimm.ui.budget.BudgetScreen
 import com.friday.wimm.ui.category.CategoryRuleScreen
 import com.friday.wimm.ui.import_screen.ImportScreen
 import com.friday.wimm.ui.ledger.LedgerHomeScreen
+import com.friday.wimm.ui.mascot.MascotPrefs
 import com.friday.wimm.ui.mascot.MascotScreen
+import com.friday.wimm.ui.mascot.MascotService
 import com.friday.wimm.ui.permissions.PermissionsScreen
 import com.friday.wimm.ui.settings.SettingsRoutes
 import com.friday.wimm.ui.settings.SettingsScreen
@@ -71,11 +73,25 @@ fun AppNavigation() {
 
 @Composable
 private fun MainContent() {
+    val context = LocalContext.current
     val tabs = remember {
         listOf(Tab.Home, Tab.Accounts, Tab.Stats, Tab.Budget, Tab.Settings)
     }
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { tabs.size })
     val scope = rememberCoroutineScope()
+
+    // Wally 是开着的话，App 一起来就把它拉起来。
+    // 否则进程被杀掉之后，开关显示「开」但桌面上根本没有 Wally，只能手动关一下再开。
+    LaunchedEffect(Unit) {
+        val prefs = context.getSharedPreferences(MascotPrefs.NAME, android.content.Context.MODE_PRIVATE)
+        val enabled = prefs.getBoolean(MascotPrefs.KEY_ENABLED, true)
+        if (enabled && android.provider.Settings.canDrawOverlays(context)) {
+            MascotService.start(
+                context,
+                MascotPrefs.clampScale(prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f))
+            )
+        }
+    }
 
     // 子页面：null 表示当前停在标签页上
     var subPage by remember { mutableStateOf<String?>(null) }

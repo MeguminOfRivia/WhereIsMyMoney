@@ -57,6 +57,9 @@ enum class MascotSnapEdge(val value: String) {
 /** Wally 当前贴着哪一侧（未贴边时为 NONE） */
 enum class MascotSide { NONE, LEFT, RIGHT }
 
+/** Wally 贴的是上边还是下边（未贴边时为 NONE） */
+enum class MascotVAnchor { NONE, TOP, BOTTOM }
+
 /**
  * 悬浮窗布局常量。
  *

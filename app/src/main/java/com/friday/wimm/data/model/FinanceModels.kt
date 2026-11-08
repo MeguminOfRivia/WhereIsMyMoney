@@ -58,17 +58,29 @@ data class MerchantRule(
     }
 }
 
-/** 某个大类在某个自然月的预算（period 形如 "2026-11"） */
+/**
+ * 某个大类在某个自然月的预算（period 形如 "2026-11"）。
+ *
+ * 两套数字要分清：
+ *  - [amountCents] 是**这个月实际能花的总数**。月中创建时，它就是「从今天到月底」的总预算，
+ *    而不是整月的（例如 9 号建 1000，这 1000 只覆盖剩下的 22 天）；
+ *  - [dailyRateCents] 是**每天多少钱**，它是「下个月自动续上」的依据：
+ *    下个月的预算 = 每天的钱 × 下个月天数（30 天 3000、31 天 3100）。
+ */
 data class MonthlyBudget(
     val id: Long = 0,
     val categoryId: Long,
     val period: String,
-    /** 本月可用总额（分），固定模式下 = 每日额度 × 当月天数 */
+    /** 本月可用总额（分） */
     val amountCents: Long,
     /** fixed：固定日限额；dynamic：按剩余天数动态计算 */
     val dailyMode: String = MODE_DYNAMIC,
-    /** 固定模式下用户填的每日额度（分） */
+    /** 旧字段，已不再使用（固定模式的每日额度改成由 [dailyRateCents] 推导） */
     val dailyAmountCents: Long = 0,
+    /** 每天多少钱（分）：下个月自动续预算就靠它 */
+    val dailyRateCents: Long = 0,
+    /** 这个月的预算从哪天开始覆盖（记账日的 dayOfMonth；整月预算是 1） */
+    val anchorDay: Int = 1,
     val createdAt: Long = System.currentTimeMillis()
 ) {
     companion object {

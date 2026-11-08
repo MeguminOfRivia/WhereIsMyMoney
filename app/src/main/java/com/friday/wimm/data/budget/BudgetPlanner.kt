@@ -34,7 +34,9 @@ data class CategoryBudgetState(
     val baseDailyCents: Long,
     val dailyLimitCents: Long,
     val todaySpentCents: Long,
-    val isCurrentMonth: Boolean
+    val isCurrentMonth: Boolean,
+    /** 这个月的预算覆盖了多少天：月中创建时就是「从创建日到月底」的天数 */
+    val coveredDays: Int = 0
 ) {
     val budgetCents: Long get() = budget.amountCents
     val isFixed: Boolean get() = budget.dailyMode == MonthlyBudget.MODE_FIXED
@@ -130,6 +132,9 @@ object BudgetPlanner {
         today: LocalDate = LocalDate.now()
     ): BudgetSnapshot {
         val yearMonth = BudgetMath.parsePeriod(period)
+        val daysInMonth = yearMonth.lengthOfMonth()
+        // 这个月还没设预算？把上个月的「每天金额」按月天数自动续过来（默认继续实行）
+        financeDao.ensureBudgetsForPeriod(period, daysInMonth)
         val periods = (0..MAX_CARRY_MONTHS).map { yearMonth.minusMonths(it.toLong()).toString() }
 
         val budgetsByPeriod: Map<String, List<MonthlyBudget>> =
@@ -160,7 +165,6 @@ object BudgetPlanner {
 
         val isCurrentMonth = YearMonth.from(today) == yearMonth
         val isPastMonth = yearMonth < YearMonth.from(today)
-        val daysInMonth = yearMonth.lengthOfMonth()
         val remainingDays = when {
             isCurrentMonth -> BudgetMath.remainingDaysIncludingToday(today)
             isPastMonth -> 0
@@ -182,22 +186,31 @@ object BudgetPlanner {
                 financeDao.getSpentCents(f, t, budget.categoryId)
             } ?: 0L
 
+            // 每天多少钱：月中创建时它就是「这笔钱 ÷ 剩下的天数」，也是下个月自动续上的依据
+            val dailyRate = if (budget.dailyRateCents > 0) {
+                budget.dailyRateCents
+            } else {
+                available / (daysInMonth - (budget.anchorDay - 1)).coerceAtLeast(1)
+            }
+            // 这个月的预算从哪天开始覆盖（月中建的就是创建那天）
+            val anchorDay = budget.anchorDay.coerceIn(1, daysInMonth)
+            val elapsedDays = if (isCurrentMonth) {
+                (today.dayOfMonth - anchorDay).coerceAtLeast(0)
+            } else {
+                0
+            }
+
             // 每天的基础额度
             val baseDaily = when {
                 !isCurrentMonth -> 0L
-                budget.dailyMode == MonthlyBudget.MODE_FIXED ->
-                    BudgetMath.planDaily(available, daysInMonth).baseCents
+                budget.dailyMode == MonthlyBudget.MODE_FIXED -> dailyRate
                 else -> BudgetMath.dynamicDailyLimit(remaining, remainingDays)
             }
-            // 今天实际能花多少：固定模式把前几天没花完的顺延进来
+            // 今天实际能花多少：固定模式把创建那天以来没花完的额度顺延到今天
             val dailyLimit = when {
                 !isCurrentMonth -> 0L
-                budget.dailyMode == MonthlyBudget.MODE_FIXED -> BudgetMath.fixedDailyLimit(
-                    availableCents = available,
-                    daysInMonth = daysInMonth,
-                    dayOfMonth = today.dayOfMonth,
-                    spentBeforeTodayCents = spent - todaySpent
-                )
+                budget.dailyMode == MonthlyBudget.MODE_FIXED ->
+                    dailyRate * (elapsedDays + 1) - (spent - todaySpent)
                 else -> baseDaily
             }
 
@@ -213,7 +226,8 @@ object BudgetPlanner {
                 baseDailyCents = baseDaily,
                 dailyLimitCents = dailyLimit,
                 todaySpentCents = todaySpent,
-                isCurrentMonth = isCurrentMonth
+                isCurrentMonth = isCurrentMonth,
+                coveredDays = (daysInMonth - anchorDay + 1).coerceAtLeast(1)
             )
         }.sortedBy { it.category.sortOrder }
 

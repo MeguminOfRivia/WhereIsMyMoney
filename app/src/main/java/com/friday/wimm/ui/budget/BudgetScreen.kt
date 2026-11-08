@@ -171,12 +171,22 @@ fun BudgetScreen(refreshKey: Int = 0) {
         val unused = expenseCategories.filter { c ->
             snapshot?.rows?.none { it.category.id == c.id } == true
         }
+        // 月中创建：这笔钱只覆盖「从今天到月底」剩下的天数
+        val today = LocalDate.now()
+        val isCurrentMonth = period == BudgetMath.periodOf(today)
+        val coveredDays = if (isCurrentMonth) {
+            BudgetMath.remainingDaysIncludingToday(today)
+        } else {
+            YearMonth.parse(period).lengthOfMonth()
+        }
+        val anchorDay = if (isCurrentMonth) today.dayOfMonth else 1
         BudgetEditDialog(
             title = "给「${category.name}」设预算",
             categoryChoices = unused,
             selectedCategory = category,
             onCategoryChange = { addingFor = it },
             initial = null,
+            coveredDays = coveredDays,
             onDismiss = { addingFor = null },
             onSave = { amountCents, mode ->
                 scope.launch {
@@ -187,7 +197,10 @@ fun BudgetScreen(refreshKey: Int = 0) {
                                 period = period,
                                 amountCents = amountCents,
                                 dailyMode = mode,
-                                dailyAmountCents = 0L
+                                dailyAmountCents = 0L,
+                                // 每天多少钱：下个月按这个数自动续上
+                                dailyRateCents = amountCents / coveredDays.coerceAtLeast(1),
+                                anchorDay = anchorDay
                             )
                         )
                     }
@@ -205,6 +218,7 @@ fun BudgetScreen(refreshKey: Int = 0) {
             selectedCategory = null,
             onCategoryChange = {},
             initial = row,
+            coveredDays = row.coveredDays,
             onDismiss = { editing = null },
             onSave = { amountCents, mode ->
                 scope.launch {
@@ -213,7 +227,9 @@ fun BudgetScreen(refreshKey: Int = 0) {
                             row.budget.copy(
                                 amountCents = amountCents,
                                 dailyMode = mode,
-                                dailyAmountCents = 0L
+                                dailyAmountCents = 0L,
+                                // 改金额就按这个月覆盖的天数重算每天的钱，下个月跟着变
+                                dailyRateCents = amountCents / row.coveredDays.coerceAtLeast(1)
                             )
                         )
                     }
@@ -529,6 +545,7 @@ private fun BudgetEditDialog(
     initial: CategoryBudgetState?,
     onDismiss: () -> Unit,
     onSave: (amountCents: Long, mode: String) -> Unit,
+    coveredDays: Int = 0,
     onDelete: (() -> Unit)? = null
 ) {
     var amountText by remember {
@@ -558,10 +575,20 @@ private fun BudgetEditDialog(
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { amountText = it },
-                    label = { Text("本月预算总额（元）") },
+                    label = { Text(if (coveredDays > 0 && coveredDays < 28) "本月剩余 $coveredDays 天的预算（元）" else "本月预算总额（元）") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                val parsed = Money.parseCents(amountText)
+                if (parsed != null && coveredDays > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "≈ 每天 ${Money.formatSignedCents(parsed / coveredDays)}，覆盖 $coveredDays 天；" +
+                            "下个月会按每天的金额自动续上",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 Text("日限额方式", style = MaterialTheme.typography.labelMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

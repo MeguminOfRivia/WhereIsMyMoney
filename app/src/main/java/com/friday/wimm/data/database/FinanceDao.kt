@@ -280,6 +280,8 @@ class FinanceDao(private val helper: DatabaseHelper) {
             put("amountCents", budget.amountCents)
             put("dailyMode", budget.dailyMode)
             put("dailyAmountCents", budget.dailyAmountCents)
+            put("dailyRateCents", budget.dailyRateCents)
+            put("anchorDay", budget.anchorDay)
             put("createdAt", budget.createdAt)
         }
         return db.insertWithOnConflict(
@@ -302,12 +304,73 @@ class FinanceDao(private val helper: DatabaseHelper) {
                     dailyMode = cursor.getString(cursor.getColumnIndexOrThrow("dailyMode"))
                         ?: MonthlyBudget.MODE_DYNAMIC,
                     dailyAmountCents = cursor.getLong(cursor.getColumnIndexOrThrow("dailyAmountCents")),
+                    dailyRateCents = cursor.getLong(cursor.getColumnIndexOrThrow("dailyRateCents")),
+                    anchorDay = cursor.getInt(cursor.getColumnIndexOrThrow("anchorDay")).let {
+                        if (it <= 0) 1 else it
+                    },
                     createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("createdAt"))
                 )
             )
         }
         cursor.close()
         return list
+    }
+
+    /**
+     * 最近一个「有预算」的月份（比 [beforePeriod] 早）。
+     *
+     * 用来把上个月的预算按「每天多少钱」续到新的一个月。
+     */
+    fun latestBudgetPeriodBefore(beforePeriod: String): String? {
+        helper.readableDatabase.rawQuery(
+            "SELECT period FROM budgets WHERE period < ? ORDER BY period DESC LIMIT 1",
+            arrayOf(beforePeriod)
+        ).use { cursor ->
+            if (cursor.moveToFirst()) return cursor.getString(0)
+        }
+        return null
+    }
+
+    /**
+     * 如果 [period] 还没有任何预算，就把之前的预算按「每天金额 × 本月天数」续过来。
+     *
+     * 只往**比已有的最新月份更晚**的月份续，不会凭空给历史月份造预算。
+     */
+    fun ensureBudgetsForPeriod(period: String, daysInMonth: Int): Int {
+        if (getBudgets(period).isNotEmpty()) return 0
+        if (latestBudgetPeriodBefore(period) == null) return 0
+        // 只在「比最新月份还新」的时候续，避免用户翻历史月份时凭空出现预算
+        val newest = helper.readableDatabase.rawQuery(
+            "SELECT period FROM budgets ORDER BY period DESC LIMIT 1", null
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+        if (newest == null || period <= newest) return 0
+
+        val source = getBudgets(latestBudgetPeriodBefore(period)!!)
+        var inserted = 0
+        source.forEach { budget ->
+            val rate = if (budget.dailyRateCents > 0) {
+                budget.dailyRateCents
+            } else {
+                // 老数据兜底：用原月份的天数反推
+                val days = runCatching {
+                    com.friday.wimm.util.BudgetMath.parsePeriod(budget.period).lengthOfMonth()
+                }.getOrDefault(30)
+                budget.amountCents / days.coerceAtLeast(1)
+            }
+            upsertBudget(
+                MonthlyBudget(
+                    categoryId = budget.categoryId,
+                    period = period,
+                    amountCents = rate * daysInMonth,
+                    dailyMode = budget.dailyMode,
+                    dailyRateCents = rate,
+                    anchorDay = 1,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+            inserted++
+        }
+        return inserted
     }
 
     fun getBudget(categoryId: Long, period: String): MonthlyBudget? =

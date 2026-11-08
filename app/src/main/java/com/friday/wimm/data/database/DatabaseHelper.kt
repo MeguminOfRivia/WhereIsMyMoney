@@ -86,6 +86,14 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             db.execSQL("UPDATE accounts SET name = '微信' WHERE name = '微信零钱' AND type = 'wechat'")
             db.execSQL("UPDATE accounts SET name = '支付宝' WHERE name = '支付宝花呗' AND type = 'alipay'")
         }
+        if (oldVersion < 11) {
+            // 升级到版本11：预算支持「每天多少钱 + 从哪天开始覆盖」，
+            // 用于「月中创建只算剩下的日子」和「下个月按每天金额自动续上」。
+            db.execSQL("ALTER TABLE budgets ADD COLUMN dailyRateCents INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE budgets ADD COLUMN anchorDay INTEGER NOT NULL DEFAULT 1")
+            // 老数据没有每天金额，按 30 天粗略反推一个，用户下次编辑时会自动更正
+            db.execSQL("UPDATE budgets SET dailyRateCents = amountCents / 30 WHERE dailyRateCents = 0")
+        }
     }
 
     /**
@@ -900,7 +908,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         )
 
         const val DATABASE_NAME = "expense_database"
-        const val DATABASE_VERSION = 10
+        const val DATABASE_VERSION = 11
 
         /** 把历史重复交易号的「后来者」置空，保证唯一索引能建起来（不会删除任何记录） */
         private const val SQL_DEDUP_TRANSACTION_NO = """

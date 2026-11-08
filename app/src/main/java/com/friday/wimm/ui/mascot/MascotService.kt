@@ -1,4 +1,4 @@
-package com.friday.wimm.ui.mascot
+﻿package com.friday.wimm.ui.mascot
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -267,7 +267,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         const val BUBBLE_H = 70
 
         /** 离边框多近就吸附（dp）：做得很小，只有主动拖到边上才会吸 */
-        private const val SNAP_THRESHOLD_DP = 18f
+        private const val SNAP_THRESHOLD_DP = 56f
         /** 两次抬手间隔小于这个值就算双击 */
         private const val DOUBLE_TAP_WINDOW_MS = 280L
 
@@ -501,75 +501,29 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val currentScale = scale
         val box = MascotLayout.boxFor(effectiveStyle())
         val panel = _panel
-        val side = _side
-        val vAnchor = _vAnchor
-        val speechVisible = mascotState.speechText != null
 
         val mascotW = box.width.value * currentScale
         val mascotH = box.height.value * currentScale
-        // 没有对话时上方不预留空间，这样贴在顶边时形象能真的顶到屏幕边缘
-        val bubbleH = if (speechVisible) MascotLayout.BUBBLE_H * currentScale else 0f
+        // 回滚到原来的布局：上方永远留一条气泡位，窗口尺寸只随「有没有预算面板」变化，
+        // 不再根据说话/贴边动态伸缩——之前拖动乱飞就是这套动态布局引起的。
+        val bubbleH = MascotLayout.BUBBLE_H * currentScale
         val panelH = if (panel != null) MascotLayout.BUDGET_PANEL_H else 0f
-        // 贴着顶边时，气泡改到形象下方出现（上面已经没有空间了）
-        val bubbleBelow = vAnchor == MascotVAnchor.TOP
-        // 贴着底边时，预算面板改到形象上方出现，否则会被屏幕底边裁掉
-        val panelOnTop = vAnchor == MascotVAnchor.BOTTOM
         val totalH = bubbleH + mascotH + panelH
-        val bubbleY = when {
-            panelOnTop -> panelH
-            bubbleBelow -> mascotH
-            else -> 0f
-        }
-        val mascotY = when {
-            panelOnTop -> panelH + bubbleH
-            bubbleBelow -> 0f
-            else -> bubbleH
-        }
-        val panelY = if (panelOnTop) 0f else totalH - panelH
+        val mascotY = bubbleH
+        val panelY = totalH - panelH
 
-        // 贴着哪一边，内容就靠哪一边。
-        // 这一步是「真的贴边」的关键：窗口本身可能比形象宽（要放预算面板），
-        // 如果内容居中，形象离屏幕边框会永远差半个窗口的宽度。
-        val contentAlign = when (side) {
-            MascotSide.LEFT -> Alignment.TopStart
-            MascotSide.RIGHT -> Alignment.TopEnd
-            MascotSide.NONE -> Alignment.TopCenter
-        }
+        val contentAlign = Alignment.TopCenter
 
-        // 调整窗口大小，贴边时重新对齐（上下左右都算）
-        LaunchedEffect(panel, currentScale, box, side, vAnchor, speechVisible) {
+        // 调整窗口大小（只改变尺寸，不动位置；位置只由用户拖动决定）
+        LaunchedEffect(panel, currentScale, box) {
             val view = composeView ?: return@LaunchedEffect
             val params = windowParams ?: return@LaunchedEffect
-            // 拖拽过程中绝对不许动窗口位置，否则会和手指抢、看起来像「乱飞」
             if (windowDragging) return@LaunchedEffect
             val density = resources.displayMetrics.density
-            val screenW = resources.displayMetrics.widthPixels
-            val screenH = contentHeightPx()
-            val oldWidth = params.width
-            val oldHeight = params.height
-            val newWidth = (windowWidthDp(box, currentScale, panel != null) * density).toInt()
-            val newHeight = (totalH * density).toInt()
-
-            if (_snapEnabled) {
-                // 贴左/右要把 x 顶回去；贴上/下要把 y 顶回去，窗口变形后也不会飘开
-                when (side) {
-                    MascotSide.LEFT -> params.x = 0
-                    MascotSide.RIGHT -> params.x = screenW - newWidth
-                    // 没贴边时，宽度变化（比如弹出预算面板）会让居中的形象左右跳，
-                    // 把窗口反向挪半个宽度差，形象就待在原地
-                    MascotSide.NONE -> if (oldWidth > 0) params.x -= (newWidth - oldWidth) / 2
-                }
-                when (vAnchor) {
-                    MascotVAnchor.TOP -> params.y = 0
-                    MascotVAnchor.BOTTOM -> params.y = screenH - newHeight
-                    // 气泡出现在形象上方时窗口是向上长的（y 不动、内容下移），
-                    // 这里把 y 反向补偿，保证「说话时形象不动，只有气泡冒出来」
-                    MascotVAnchor.NONE -> if (oldHeight > 0) params.y -= newHeight - oldHeight
-                }
-            }
-            params.width = newWidth
-            params.height = newHeight
-            // 没贴底时，窗口别越过屏幕下沿
+            val screenH = resources.displayMetrics.heightPixels
+            params.width = (windowWidthDp(box, currentScale, panel != null) * density).toInt()
+            params.height = (totalH * density).toInt()
+            // 展开面板后别越过屏幕下沿
             if (params.y + params.height > screenH - 8) {
                 params.y = (screenH - params.height - 8).coerceAtLeast(0)
             }
@@ -582,13 +536,12 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         Box(
             modifier = Modifier.size(containerW.dp, totalH.dp)
         ) {
-            // 气泡（贴顶边时在下方，其余情况在上方）
-            if (speechVisible) {
+            // 气泡（固定在形象上方，和回滚前的版本一致）
+            if (mascotState.speechText != null) {
                 Box(
                     modifier = Modifier
                         .size(mascotW.dp, bubbleH.dp)
-                        .align(contentAlign)
-                        .offset(y = bubbleY.dp),
+                        .align(contentAlign),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
@@ -633,9 +586,6 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                 var prevAngle = 0f
                                 var totalAngleChange = 0f
                                 var angleInitialized = false
-                                // 上一次的「屏幕坐标」，用于算真实位移
-                                var lastRawX = (windowParams?.x ?: 0) + downChange.position.x
-                                var lastRawY = (windowParams?.y ?: 0) + downChange.position.y
 
                                 if (isEyeTrackEnabled() && Random.nextFloat() < getEyeTrackProb()) {
                                     updateEyeOffset(downChange.position.x, downChange.position.y)
@@ -677,16 +627,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                         break
                                     }
 
-                                    // 用「屏幕坐标」算位移，不能用 change.positionChange()。
-                                    // 因为窗口是跟着手指移动的，局部坐标会把窗口自身的位移抵消掉，
-                                    // 结果窗口只按手指速度的一半走，拖快了还会被系统判成出界而中断。
-                                    val win = windowParams
-                                    val rawX = (win?.x ?: 0) + change.position.x
-                                    val rawY = (win?.y ?: 0) + change.position.y
-                                    val dx = rawX - lastRawX
-                                    val dy = rawY - lastRawY
-                                    lastRawX = rawX
-                                    lastRawY = rawY
+                                    val dx = change.positionChange().x
+                                    val dy = change.positionChange().y
                                     val deltaDist = sqrt(dx * dx + dy * dy)
                                     totalDragDist += deltaDist
 
@@ -694,10 +636,6 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                         longPressJob.cancel()
                                         if (!isDragging) {
                                             isDragging = true
-                                            // 一开始拖就清掉贴边锚点：
-                                            // 否则它一说话（气泡改变窗口高度）窗口就会被拉回边框
-                                            _side = MascotSide.NONE
-                                            _vAnchor = MascotVAnchor.NONE
                                             windowDragging = true
                                             windowAnimJob?.cancel()
                                         }
@@ -754,7 +692,6 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         speechVisible = mascotState.speechText != null,
                         clickTick = mascotState.clickTick,
                         flipHorizontal = shouldFlip(),
-                        alignSide = side,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -1077,18 +1014,21 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
      * 规则：离最近的水平边小于阈值就贴过去，并记录贴的是哪一侧；
      * 同一侧一旦确定，[shouldFlip] 会保证"图片该贴边的那一侧"始终朝向边框。
      */
+    /**
+     * 松手后判断是否要贴边（回滚到原来的行为：只贴左/右，阈值 56dp）。
+     *
+     * 规则：离最近的水平边小于阈值就贴过去，并记录贴的是哪一侧；
+     * 同一侧一旦确定，[shouldFlip] 会保证"图片该贴边的那一侧"始终朝向边框。
+     */
     private fun snapToNearestEdge() {
+        _vAnchor = MascotVAnchor.NONE
         if (!_snapEnabled) {
             _side = MascotSide.NONE
-            _vAnchor = MascotVAnchor.NONE
             return
         }
         val params = windowParams ?: return
         val metrics = resources.displayMetrics
         val screenW = metrics.widthPixels
-        val screenH = contentHeightPx()
-        // 阈值故意做得很小（[SNAP_THRESHOLD_DP]）：只有真的把 Wally 拖到边框上才吸附，
-        // 手滑路过边缘不会被"吸"走。
         val threshold = SNAP_THRESHOLD_DP * metrics.density
 
         var targetX = params.x
@@ -1103,21 +1043,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             side = MascotSide.RIGHT
         }
 
-        var targetY = params.y
-        var vAnchor = MascotVAnchor.NONE
-        val topGap = params.y.toFloat()
-        val bottomGap = (screenH - params.y - params.height).toFloat()
-        if (topGap <= threshold && topGap <= bottomGap) {
-            targetY = 0
-            vAnchor = MascotVAnchor.TOP
-        } else if (bottomGap <= threshold) {
-            targetY = screenH - params.height
-            vAnchor = MascotVAnchor.BOTTOM
-        }
-
         _side = side
-        _vAnchor = vAnchor
-        animateWindowTo(targetX, targetY)
+        animateWindowTo(targetX, params.y)
     }
 
     private fun animateWindowTo(targetX: Int, targetY: Int) {
@@ -1169,8 +1096,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val density = resources.displayMetrics.density
         val screenW = resources.displayMetrics.widthPixels
         val box = MascotLayout.boxFor(effectiveStyle())
-        val speechVisible = mascotState.speechText != null
-        val bubbleH = if (speechVisible) MascotLayout.BUBBLE_H * scale else 0f
+        val bubbleH = MascotLayout.BUBBLE_H * scale
         val panelH = if (_panel != null) MascotLayout.BUDGET_PANEL_H else 0f
         params.width = (windowWidthDp(box, scale, _panel != null) * density).toInt()
         params.height = ((box.height.value * scale + bubbleH + panelH) * density).toInt()
@@ -1181,11 +1107,6 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 MascotSide.RIGHT -> params.x = screenW - params.width
                 MascotSide.NONE -> Unit
             }
-            when (_vAnchor) {
-                MascotVAnchor.TOP -> params.y = 0
-                MascotVAnchor.BOTTOM -> params.y = contentHeightPx() - params.height
-                MascotVAnchor.NONE -> Unit
-            }
         }
         windowParams = params
         try {
@@ -1194,26 +1115,19 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     /**
-     * 窗口宽度（dp）。
-     *
-     * 没展开面板时，窗口宽度就等于形象宽度（最小留 [MIN_WINDOW_W] 方便点按），
-     * 这样「窗口贴边」就等于「形象贴边」；展开预算面板时才临时变宽。
+     * 窗口宽度（dp）：回滚到原来的算法——宽度足够放快捷菜单/预算面板，形象居中。
      */
     private fun windowWidthDp(box: MascotBox, scale: Float, panelVisible: Boolean): Float {
         val mascotW = box.width.value * scale
-        return if (panelVisible) {
-            maxOf(mascotW, MascotLayout.BUDGET_PANEL_W)
-        } else {
-            maxOf(mascotW, MIN_WINDOW_W)
-        }
+        val base = maxOf(mascotW, MascotLayout.MENU_W)
+        return if (panelVisible) maxOf(base, MascotLayout.BUDGET_PANEL_W) else base
     }
 
     private fun createLayoutParams(scale: Float): WindowManager.LayoutParams {
         val density = resources.displayMetrics.density
         val box = MascotLayout.boxFor(effectiveStyle())
         val w = (windowWidthDp(box, scale, false) * density).toInt()
-        // 初始没有对话，窗口高度只算形象本身，上方不留空
-        val h = (box.height.value * density * scale).toInt()
+        val h = ((box.height.value + MascotLayout.BUBBLE_H) * density * scale).toInt()
         return WindowManager.LayoutParams(
             w, h,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)

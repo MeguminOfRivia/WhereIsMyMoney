@@ -74,7 +74,7 @@ class ImportViewModel(
 
                     // 归属账户 + 自动分类 + 与通知记录合并
                     val prepared = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        prepareTransactions(transactions)
+                        prepareTransactions(transactions, fileName)
                     }
 
                     val insertedCount = repository.insertAll(prepared.toInsert, fileId)
@@ -108,13 +108,24 @@ class ImportViewModel(
 
     private class Prepared(val toInsert: List<Transaction>, val mergedCount: Int)
 
-    private fun prepareTransactions(source: List<Transaction>): Prepared {
+    private fun prepareTransactions(source: List<Transaction>, fileName: String): Prepared {
         val financeDao = app.financeDao
         val ledgerDao = app.ledgerDao
         val toInsert = mutableListOf<Transaction>()
         var merged = 0
 
-        source.forEach { tx ->
+        source.forEach { raw ->
+            // 解析器认不出来源时，再从文件名猜一次（微信支付账单xx.xlsx / alipay_record_xx.csv）
+            val sourceTag = when (raw.source) {
+                "wechat", "alipay" -> raw.source
+                else -> when {
+                    fileName.contains("微信") || fileName.contains("wechat", ignoreCase = true) -> "wechat"
+                    fileName.contains("支付宝") || fileName.contains("alipay", ignoreCase = true) -> "alipay"
+                    else -> raw.source
+                }
+            }
+            val tx = raw.copy(source = sourceTag)
+
             val accountId = if (tx.accountId > 0) {
                 tx.accountId
             } else {

@@ -39,6 +39,9 @@ object XLSXParser {
             return transactions
         }
 
+        // 判断这是微信还是支付宝导出的账单，方便自动挂到对应账户上
+        val sourceTag = detectSourceTag(sheet, headerRowIndex)
+
         // 获取列索引 - 精确匹配优先
         val timeCol = findColumn(headerMap, "交易时间")
         val merchantCol = findColumn(headerMap, "交易对方", "对方")
@@ -106,7 +109,7 @@ object XLSXParser {
                     Transaction(
                         amount = amount,
                         merchant = finalMerchant,
-                        source = "xlsx",
+                        source = sourceTag,
                         timestamp = timestamp,
                         note = note.ifEmpty { product },
                         type = type,
@@ -122,8 +125,21 @@ object XLSXParser {
         return transactions
     }
 
-    private fun findColumn(headerMap: Map<String, Int>, vararg names: String): Int {
-        // 优先精确匹配
+    /** 在表头之前的几行里找「微信 / 支付宝」字样，用来决定流水挂到哪个账户 */
+    private fun detectSourceTag(sheet: org.apache.poi.ss.usermodel.Sheet, headerRowIndex: Int): String {
+        val limit = if (headerRowIndex > 0) headerRowIndex else 3
+        for (i in 0..limit) {
+            val row = sheet.getRow(i) ?: continue
+            for (j in 0 until row.lastCellNum) {
+                val text = row.getCell(j)?.toString() ?: continue
+                if (text.contains("微信")) return "wechat"
+                if (text.contains("支付宝")) return "alipay"
+            }
+        }
+        return "xlsx"
+    }
+
+    private fun findColumn(headerMap: Map<String, Int>, vararg names: String): Int {        // 优先精确匹配
         for (name in names) {
             headerMap[name]?.let { return it }
         }

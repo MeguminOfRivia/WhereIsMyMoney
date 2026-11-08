@@ -44,4 +44,13 @@ class MoneyParseTest {
         assertEquals(100L, Money.parseCents("0.999"))
         assertEquals(1L, Money.parseCents("0.005"))
     }
+
+    @Test
+    fun `账户初始余额允许负数`() {
+        assertEquals(-150000L, Money.parseSignedCents("-1500"))
+        assertEquals(0L, Money.parseSignedCents("0"))
+        assertEquals(1234L, Money.parseSignedCents("12.34"))
+        assertNull(Money.parseSignedCents(""))
+        assertNull(Money.parseSignedCents("abc"))
+    }
 }

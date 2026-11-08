@@ -32,14 +32,24 @@ object Money {
      * 交给调用方去提示，而不是默默记成 0 元。
      */
     fun parseCents(text: String): Long? {
+        val cents = parseSignedCents(text) ?: return null
+        return if (cents > 0L) cents else null
+    }
+
+    /**
+     * 允许负数与 0 的解析——账户初始余额可以是负的（花呗欠款），
+     * 这类地方不能用 [parseCents]。
+     */
+    fun parseSignedCents(text: String): Long? {
         val cleaned = text.trim()
             .replace("¥", "").replace("￥", "")
             .replace(",", "").replace("，", "")
+            .replace("−", "-")
         if (cleaned.isEmpty()) return null
         val value = cleaned.toDoubleOrNull() ?: return null
-        if (value.isNaN() || value.isInfinite() || value <= 0.0) return null
+        if (value.isNaN() || value.isInfinite()) return null
         // 一亿元以上当作输入错误，挡住手滑多打几个零
-        if (value > 100_000_000.0) return null
+        if (value > 100_000_000.0 || value < -100_000_000.0) return null
         return Math.round(value * 100.0)
     }
 }

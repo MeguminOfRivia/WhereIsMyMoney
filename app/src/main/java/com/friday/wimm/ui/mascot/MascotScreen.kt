@@ -62,6 +62,10 @@ fun MascotScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = 
         )
     }
     var clickJelly by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_CLICK_JELLY, true)) }
+    var blinkUri by remember { mutableStateOf(prefs.getString(MascotPrefs.KEY_BLINK_URI, null)) }
+    var blinkEnabled by remember {
+        mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_BLINK_ENABLED, true))
+    }
     var snapEnabled by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_SNAP_ENABLED, true)) }
     var snapEdge by remember {
         mutableStateOf(
@@ -104,10 +108,20 @@ fun MascotScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = 
         }
     }
 
+    val blinkPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            prefs.edit().putString(MascotPrefs.KEY_BLINK_URI, uri.toString()).commit()
+            blinkUri = uri.toString()
+            persistUri(uri)
+        }
+    }
+
     // 每次进入页面时刷新设置（快捷菜单可能修改过）
     LaunchedEffect(Unit) {
         enabled = prefs.getBoolean(MascotPrefs.KEY_ENABLED, true)
-        scale = prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f)
+        scale = MascotPrefs.clampScale(prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f))
         randomMoveEnabled = prefs.getBoolean(MascotPrefs.KEY_RANDOM_MOVE, true)
         speechEnabled = prefs.getBoolean(MascotPrefs.KEY_SPEECH, true)
         eyeTrackEnabled = prefs.getBoolean(MascotPrefs.KEY_EYE_TRACK, true)
@@ -115,6 +129,8 @@ fun MascotScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = 
         style = MascotStyle.from(prefs.getString(MascotPrefs.KEY_STYLE, MascotStyle.BUILTIN.value))
         imageUri = prefs.getString(MascotPrefs.KEY_IMAGE_URI, null)
         mouthUri = prefs.getString(MascotPrefs.KEY_MOUTH_URI, null)
+        blinkUri = prefs.getString(MascotPrefs.KEY_BLINK_URI, null)
+        blinkEnabled = prefs.getBoolean(MascotPrefs.KEY_BLINK_ENABLED, true)
         animMode = MascotAnimMode.from(
             prefs.getString(MascotPrefs.KEY_ANIM_MODE, MascotAnimMode.JELLY.value)
         )
@@ -226,6 +242,8 @@ fun MascotScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = 
                         CustomImageMascot(
                             imageUri = imageUri,
                             mouthUri = mouthUri,
+                            blinkUri = blinkUri,
+                            blinkEnabled = blinkEnabled,
                             animMode = animMode,
                             clickJelly = false,
                             speechVisible = previewSpeech || previewState.speechText != null,
@@ -365,14 +383,14 @@ fun MascotScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = 
         ) {
             Text("小", style = MaterialTheme.typography.bodySmall)
             Slider(
-                value = scale,
+                value = MascotPrefs.clampScale(scale),
                 onValueChange = {
-                    scale = it
-                    prefs.edit().putFloat(MascotPrefs.KEY_SCALE, it).commit()
-                    if (enabled) MascotService.updateScale(context, it)
+                    val clamped = MascotPrefs.clampScale(it)
+                    scale = clamped
+                    prefs.edit().putFloat(MascotPrefs.KEY_SCALE, clamped).commit()
+                    if (enabled) MascotService.updateScale(context, clamped)
                 },
-                valueRange = 0.5f..2.0f,
-                steps = 5,
+                valueRange = MascotPrefs.MIN_SCALE..MascotPrefs.MAX_SCALE,
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 8.dp)
@@ -380,7 +398,7 @@ fun MascotScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = 
             Text("大", style = MaterialTheme.typography.bodySmall)
         }
         Text(
-            "当前: ${(scale * 100).toInt()}%",
+            "当前: ${(scale * 100).toInt()}%（可调范围 ${(MascotPrefs.MIN_SCALE * 100).toInt()}% ~ ${(MascotPrefs.MAX_SCALE * 100).toInt()}%）",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 4.dp)
@@ -451,6 +469,44 @@ fun MascotScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = 
                         if (enabled) MascotService.notifySettingsChanged(context)
                     }
                 ) { Text("移除张口差分") }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { blinkPicker.launch(arrayOf("image/*")) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (blinkUri.isNullOrBlank()) "选择闭眼差分（可选）" else "更换闭眼差分")
+            }
+            if (!blinkUri.isNullOrBlank()) {
+                TextButton(
+                    onClick = {
+                        prefs.edit().remove(MascotPrefs.KEY_BLINK_URI).commit()
+                        blinkUri = null
+                        if (enabled) MascotService.notifySettingsChanged(context)
+                    }
+                ) { Text("移除闭眼差分") }
+            }
+            if (blinkUri.isNullOrBlank()) {
+                Text(
+                    "选一张闭着眼睛的差分图，Wally 就会时不时眨一下眼。" +
+                        "真人平均每分钟眨眼 15~20 次（约 3~4 秒一次），这里按 3~6 秒随机，偶尔连眨两下。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp)
+                )
+            } else {
+                Spacer(modifier = Modifier.height(4.dp))
+                SettingSwitchItem(
+                    title = "会眨眼",
+                    subtitle = "每 3~6 秒眨一次，约两成概率连眨两下",
+                    checked = blinkEnabled,
+                    onCheckedChange = {
+                        blinkEnabled = it
+                        prefs.edit().putBoolean(MascotPrefs.KEY_BLINK_ENABLED, it).commit()
+                        if (enabled) MascotService.notifySettingsChanged(context)
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))

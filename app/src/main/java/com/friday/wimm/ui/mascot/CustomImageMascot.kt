@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -26,17 +28,21 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.math.sqrt
+import kotlin.random.Random
 
 /**
- * 用户自定义形象：一张照片或 GIF，可切换「果冻 Q 弹」与「张口差分」两种动画。
+ * 用户自定义形象：一张照片或 GIF，可切换「果冻 Q 弹」与「张口差分」两种动画，还能眨眼。
  *
  * 实现要点：
  *  - 不引入任何图片库：Android 9+ 用系统的 [ImageDecoder]，可直接解出会动的 GIF；
  *  - Q 弹效果用 `spring(dampingRatio ≈ 0.3)`，弹簧自然会过冲，不需要手写关键帧；
  *  - 挤压时按体积守恒换算横向缩放（`sx = 1/√sy`），看起来才像橡皮而不是压扁；
- *  - 变换原点在**底部中心**，所以是"脚不动、身体弹"，不是整体缩放。
+ *  - 变换原点在**底部中心**，所以是"脚不动、身体弹"，不是整体缩放；
+ *  - 眨眼：真人平均每分钟眨 15～20 次（约 3～4 秒一次），每次闭合 100～150 毫秒，
+ *    所以这里用 2.8～6.5 秒的随机间隔 + 130 毫秒闭眼，另有约两成概率连眨两下。
  */
 @Composable
 fun CustomImageMascot(
@@ -47,6 +53,8 @@ fun CustomImageMascot(
     speechVisible: Boolean,
     clickTick: Int,
     flipHorizontal: Boolean = false,
+    blinkUri: String? = null,
+    blinkEnabled: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -58,9 +66,39 @@ fun CustomImageMascot(
     val mouth by produceState<Drawable?>(initialValue = null, mouthUri) {
         value = MascotImageLoader.load(context, mouthUri)
     }
+    val blink by produceState<Drawable?>(initialValue = null, blinkUri) {
+        value = MascotImageLoader.load(context, blinkUri)
+    }
+
+    // 眨眼状态：闭眼的那一帧只保持很短时间
+    var blinking by remember { mutableStateOf(false) }
+    val blinkReady = blinkEnabled && blink != null
+    LaunchedEffect(blinkReady) {
+        if (!blinkReady) {
+            blinking = false
+            return@LaunchedEffect
+        }
+        while (true) {
+            delay(Random.nextLong(2800L, 6500L))
+            blinking = true
+            delay(130L)
+            blinking = false
+            // 大约两成概率连眨两下，更像活物
+            if (Random.nextFloat() < 0.22f) {
+                delay(110L)
+                blinking = true
+                delay(120L)
+                blinking = false
+            }
+        }
+    }
 
     val showMouth = animMode == MascotAnimMode.MOUTH && speechVisible && mouth != null
-    val current = if (showMouth) mouth else image
+    val current = when {
+        blinking && blink != null -> blink
+        showMouth -> mouth
+        else -> image
+    }
 
     val squash = remember { Animatable(1f) }
 

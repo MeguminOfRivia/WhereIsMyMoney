@@ -135,14 +135,24 @@ object BudgetPlanner {
             val spent = spentOf(period, budget.categoryId)
             val available = budget.amountCents + carryIn + adjust
             val remaining = available - spent
-            val dailyLimit = when {
-                budget.dailyMode == MonthlyBudget.MODE_FIXED && budget.dailyAmountCents > 0 ->
-                    budget.dailyAmountCents
-                else -> BudgetMath.dynamicDailyLimit(remaining, remainingDays)
-            }
             val todaySpent = todayRange?.let { (f, t) ->
                 financeDao.getSpentCents(f, t, budget.categoryId)
             } ?: 0L
+            val dailyLimit = when (budget.dailyMode) {
+                MonthlyBudget.MODE_FIXED -> when {
+                    // 固定日额度：本月可用 ÷ 当月天数（余数补给前几天），
+                    // 并且之前每天没花完的额度自动滚到今天
+                    isCurrentMonth -> BudgetMath.fixedDailyLimit(
+                        availableCents = available,
+                        daysInMonth = yearMonth.lengthOfMonth(),
+                        dayOfMonth = today.dayOfMonth,
+                        spentBeforeTodayCents = spent - todaySpent
+                    )
+                    isPastMonth -> 0L
+                    else -> BudgetMath.splitDaily(available, yearMonth.lengthOfMonth()).quotaOfDay(1)
+                }
+                else -> BudgetMath.dynamicDailyLimit(remaining, remainingDays)
+            }
 
             CategoryBudgetState(
                 category = category,

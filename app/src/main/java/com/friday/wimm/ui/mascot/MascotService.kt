@@ -80,12 +80,22 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var _scale by mutableFloatStateOf(1.0f)
     private val scale: Float get() = _scale
 
-    // ── 形象外观（跨进程通过广播刷新） ──────────────────────
+    // ── 形象外观 ──────────────────────────────────────────
+    // 跨进程不靠 SharedPreferences 的进程内缓存（它不会自动刷新），
+    // 而是主进程把设置塞进广播的 extras 里发过来，这里直接覆盖内存值。
     private var _style by mutableStateOf(MascotStyle.CUSTOM)
     private var _imageUri by mutableStateOf<String?>(null)
     private var _mouthUri by mutableStateOf<String?>(null)
+    private var _blinkUri by mutableStateOf<String?>(null)
+    private var _blinkEnabled by mutableStateOf(true)
     private var _animMode by mutableStateOf(MascotAnimMode.JELLY)
     private var _clickJelly by mutableStateOf(true)
+
+    // ── 行为开关 ──────────────────────────────────────────
+    private var _randomMove by mutableStateOf(true)
+    private var _speech by mutableStateOf(true)
+    private var _eyeTrack by mutableStateOf(true)
+    private var _eyeTrackProb by mutableFloatStateOf(1f)
 
     // ── 贴边吸附 ──────────────────────────────────────────
     private var _snapEnabled by mutableStateOf(true)
@@ -125,11 +135,12 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     private fun reloadAppearance() {
-        prefs.edit().commit()
-        _scale = prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f)
+        _scale = MascotPrefs.clampScale(prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f))
         _style = MascotStyle.from(prefs.getString(MascotPrefs.KEY_STYLE, MascotStyle.CUSTOM.value))
         _imageUri = prefs.getString(MascotPrefs.KEY_IMAGE_URI, null)
         _mouthUri = prefs.getString(MascotPrefs.KEY_MOUTH_URI, null)
+        _blinkUri = prefs.getString(MascotPrefs.KEY_BLINK_URI, null)
+        _blinkEnabled = prefs.getBoolean(MascotPrefs.KEY_BLINK_ENABLED, true)
         _animMode = MascotAnimMode.from(
             prefs.getString(MascotPrefs.KEY_ANIM_MODE, MascotAnimMode.JELLY.value)
         )
@@ -138,28 +149,72 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         _snapEdge = MascotSnapEdge.from(
             prefs.getString(MascotPrefs.KEY_SNAP_EDGE, MascotSnapEdge.LEFT.value)
         )
+        _randomMove = prefs.getBoolean(MascotPrefs.KEY_RANDOM_MOVE, true)
+        _speech = prefs.getBoolean(MascotPrefs.KEY_SPEECH, true)
+        _eyeTrack = prefs.getBoolean(MascotPrefs.KEY_EYE_TRACK, true)
+        _eyeTrackProb = prefs.getFloat(MascotPrefs.KEY_EYE_TRACK_PROB, 1.0f)
         if (!_snapEnabled) _side = MascotSide.NONE
     }
 
-    private val prefs by lazy { getSharedPreferences(MascotPrefs.NAME, Context.MODE_MULTI_PROCESS) }
+    /**
+     * 用广播里带过来的设置覆盖内存值。
+     *
+     * 只覆盖「带了这个 extra」的项，这样同一条广播既能改全部设置，
+     * 也能只改一项，不会把没提到的设置清空。
+     */
+    private fun applySettings(intent: Intent) {
+        if (intent.hasExtra(EXTRA_SCALE)) {
+            _scale = MascotPrefs.clampScale(intent.getFloatExtra(EXTRA_SCALE, _scale))
+        }
+        if (intent.hasExtra(EXTRA_STYLE)) {
+            _style = MascotStyle.from(intent.getStringExtra(EXTRA_STYLE))
+        }
+        if (intent.hasExtra(EXTRA_IMAGE_URI)) {
+            _imageUri = intent.getStringExtra(EXTRA_IMAGE_URI)
+        }
+        if (intent.hasExtra(EXTRA_MOUTH_URI)) {
+            _mouthUri = intent.getStringExtra(EXTRA_MOUTH_URI)
+        }
+        if (intent.hasExtra(EXTRA_BLINK_URI)) {
+            _blinkUri = intent.getStringExtra(EXTRA_BLINK_URI)
+        }
+        if (intent.hasExtra(EXTRA_BLINK_ENABLED)) {
+            _blinkEnabled = intent.getBooleanExtra(EXTRA_BLINK_ENABLED, true)
+        }
+        if (intent.hasExtra(EXTRA_ANIM_MODE)) {
+            _animMode = MascotAnimMode.from(intent.getStringExtra(EXTRA_ANIM_MODE))
+        }
+        if (intent.hasExtra(EXTRA_CLICK_JELLY)) {
+            _clickJelly = intent.getBooleanExtra(EXTRA_CLICK_JELLY, true)
+        }
+        if (intent.hasExtra(EXTRA_SNAP_ENABLED)) {
+            val enabled = intent.getBooleanExtra(EXTRA_SNAP_ENABLED, true)
+            _snapEnabled = enabled
+            if (!enabled) _side = MascotSide.NONE
+        }
+        if (intent.hasExtra(EXTRA_SNAP_EDGE)) {
+            _snapEdge = MascotSnapEdge.from(intent.getStringExtra(EXTRA_SNAP_EDGE))
+        }
+        if (intent.hasExtra(EXTRA_RANDOM_MOVE)) {
+            _randomMove = intent.getBooleanExtra(EXTRA_RANDOM_MOVE, true)
+        }
+        if (intent.hasExtra(EXTRA_SPEECH)) {
+            _speech = intent.getBooleanExtra(EXTRA_SPEECH, true)
+        }
+        if (intent.hasExtra(EXTRA_EYE_TRACK)) {
+            _eyeTrack = intent.getBooleanExtra(EXTRA_EYE_TRACK, true)
+        }
+        if (intent.hasExtra(EXTRA_EYE_TRACK_PROB)) {
+            _eyeTrackProb = intent.getFloatExtra(EXTRA_EYE_TRACK_PROB, 1f)
+        }
+    }
 
-    // 跨进程读取设置：每次都从磁盘刷新缓存
-    private fun isRandomMoveEnabled(): Boolean {
-        prefs.edit().commit()
-        return prefs.getBoolean(MascotPrefs.KEY_RANDOM_MOVE, true)
-    }
-    private fun isSpeechEnabled(): Boolean {
-        prefs.edit().commit()
-        return prefs.getBoolean(MascotPrefs.KEY_SPEECH, true)
-    }
-    private fun isEyeTrackEnabled(): Boolean {
-        prefs.edit().commit()
-        return prefs.getBoolean(MascotPrefs.KEY_EYE_TRACK, true)
-    }
-    private fun getEyeTrackProb(): Float {
-        prefs.edit().commit()
-        return prefs.getFloat(MascotPrefs.KEY_EYE_TRACK_PROB, 1.0f)
-    }
+    private val prefs by lazy { getSharedPreferences(MascotPrefs.NAME, Context.MODE_PRIVATE) }
+
+    private fun isRandomMoveEnabled(): Boolean = _randomMove
+    private fun isSpeechEnabled(): Boolean = _speech
+    private fun isEyeTrackEnabled(): Boolean = _eyeTrack
+    private fun getEyeTrackProb(): Float = _eyeTrackProb
 
     override val lifecycle: Lifecycle get() = lifecycleRegistry
     override val savedStateRegistry: SavedStateRegistry
@@ -169,10 +224,26 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         private const val CHANNEL_ID = "mascot_service"
         private const val NOTIFICATION_ID = 2001
         private const val EXTRA_SCALE = "scale"
+        private const val EXTRA_STYLE = "style"
+        private const val EXTRA_IMAGE_URI = "image_uri"
+        private const val EXTRA_MOUTH_URI = "mouth_uri"
+        private const val EXTRA_BLINK_URI = "blink_uri"
+        private const val EXTRA_BLINK_ENABLED = "blink_enabled"
+        private const val EXTRA_ANIM_MODE = "anim_mode"
+        private const val EXTRA_CLICK_JELLY = "click_jelly"
+        private const val EXTRA_SNAP_ENABLED = "snap_enabled"
+        private const val EXTRA_SNAP_EDGE = "snap_edge"
+        private const val EXTRA_RANDOM_MOVE = "random_move"
+        private const val EXTRA_SPEECH = "speech"
+        private const val EXTRA_EYE_TRACK = "eye_track"
+        private const val EXTRA_EYE_TRACK_PROB = "eye_track_prob"
         const val ACTION_NOTIFICATION_EVENT = "com.friday.wimm.MASCOT_NOTIFICATION"
         const val EXTRA_IS_INCOME = "is_income"
         const val EXTRA_MERCHANT = "merchant"
         const val ACTION_SETTINGS_CHANGED = "com.friday.wimm.MASCOT_SETTINGS_CHANGED"
+
+        /** 窗口最窄也要留一点，免得缩到 10% 时手指完全点不到 */
+        private const val MIN_WINDOW_W = 56f
 
         const val MASCOT_W = 184
         const val MASCOT_H = 100
@@ -222,9 +293,55 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             context.sendBroadcast(intent)
         }
 
+        /**
+         * 把当前设置打包进广播。
+         *
+         * 不用「发个空广播让对方自己去读 SharedPreferences」——Android 的 SharedPreferences
+         * 是按进程缓存的，跨进程读到的永远是旧值（MODE_MULTI_PROCESS 在 7.0 之后已失效）。
+         * 所以这里把值直接带过去，Wally 收到就立刻变。
+         */
         fun notifySettingsChanged(context: Context) {
+            val p = context.getSharedPreferences(MascotPrefs.NAME, Context.MODE_PRIVATE)
             val intent = Intent(ACTION_SETTINGS_CHANGED).apply {
                 setPackage(context.packageName)
+                putExtra(EXTRA_SCALE, MascotPrefs.clampScale(p.getFloat(MascotPrefs.KEY_SCALE, 1.0f)))
+                putExtra(
+                    EXTRA_STYLE,
+                    p.getString(MascotPrefs.KEY_STYLE, MascotStyle.CUSTOM.value)
+                )
+                putExtra(EXTRA_IMAGE_URI, p.getString(MascotPrefs.KEY_IMAGE_URI, null))
+                putExtra(EXTRA_MOUTH_URI, p.getString(MascotPrefs.KEY_MOUTH_URI, null))
+                putExtra(EXTRA_BLINK_URI, p.getString(MascotPrefs.KEY_BLINK_URI, null))
+                putExtra(
+                    EXTRA_BLINK_ENABLED,
+                    p.getBoolean(MascotPrefs.KEY_BLINK_ENABLED, true)
+                )
+                putExtra(
+                    EXTRA_ANIM_MODE,
+                    p.getString(MascotPrefs.KEY_ANIM_MODE, MascotAnimMode.JELLY.value)
+                )
+                putExtra(
+                    EXTRA_CLICK_JELLY,
+                    p.getBoolean(MascotPrefs.KEY_CLICK_JELLY, true)
+                )
+                putExtra(
+                    EXTRA_SNAP_ENABLED,
+                    p.getBoolean(MascotPrefs.KEY_SNAP_ENABLED, true)
+                )
+                putExtra(
+                    EXTRA_SNAP_EDGE,
+                    p.getString(MascotPrefs.KEY_SNAP_EDGE, MascotSnapEdge.LEFT.value)
+                )
+                putExtra(
+                    EXTRA_RANDOM_MOVE,
+                    p.getBoolean(MascotPrefs.KEY_RANDOM_MOVE, true)
+                )
+                putExtra(EXTRA_SPEECH, p.getBoolean(MascotPrefs.KEY_SPEECH, true))
+                putExtra(EXTRA_EYE_TRACK, p.getBoolean(MascotPrefs.KEY_EYE_TRACK, true))
+                putExtra(
+                    EXTRA_EYE_TRACK_PROB,
+                    p.getFloat(MascotPrefs.KEY_EYE_TRACK_PROB, 1.0f)
+                )
             }
             context.sendBroadcast(intent)
         }
@@ -247,7 +364,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     }
                 }
                 ACTION_SETTINGS_CHANGED -> {
-                    reloadAppearance()
+                    intent?.let { applySettings(it) }
+                    // 换了图片要把解码缓存清掉，否则同一路径改了内容还是旧图
+                    MascotImageLoader.clearCache()
                     updateMascotSize(_scale)
                 }
             }
@@ -281,7 +400,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val newScale = intent?.getFloatExtra(EXTRA_SCALE, scale) ?: scale
-        _scale = newScale
+        _scale = MascotPrefs.clampScale(newScale)
 
         if (composeView == null) {
             lifecycleRegistry.currentState = Lifecycle.State.RESUMED
@@ -359,17 +478,35 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val panelH = if (panel != null) MascotLayout.BUDGET_PANEL_H else 0f
         val mascotAreaH = (MascotLayout.BUBBLE_H + box.height.value) * currentScale
         val totalH = mascotAreaH + panelH
+        val side = _side
 
-        // 调整窗口大小（向下扩展，不改 y）
-        LaunchedEffect(panel, currentScale, box) {
+        // 贴着哪一边，内容就靠哪一边。
+        // 这一步是「真的贴边」的关键：窗口本身可能比形象宽（要放预算面板），
+        // 如果内容居中，形象离屏幕边框会永远差半个窗口的宽度。
+        val contentAlign = when (side) {
+            MascotSide.LEFT -> Alignment.TopStart
+            MascotSide.RIGHT -> Alignment.TopEnd
+            MascotSide.NONE -> Alignment.TopCenter
+        }
+
+        // 调整窗口大小，贴边时重新对齐
+        LaunchedEffect(panel, currentScale, box, side, _snapEnabled) {
             val view = composeView ?: return@LaunchedEffect
             val params = windowParams ?: return@LaunchedEffect
             val density = resources.displayMetrics.density
-            val winW = maxOf(box.width.value * currentScale, MascotLayout.BUDGET_PANEL_W)
-            params.width = (winW * density).toInt()
-            params.height = (totalH * density).toInt()
-            // 展开面板后窗口变高，贴着屏幕底部时会被裁掉，这里往上挪一挪
+            val screenW = resources.displayMetrics.widthPixels
             val screenH = resources.displayMetrics.heightPixels
+            params.width = (windowWidthDp(box, currentScale, panel != null) * density).toInt()
+            params.height = (totalH * density).toInt()
+            // 贴右边时窗口变宽/变窄都要把 x 顶回去，否则形象会离开边框
+            if (_snapEnabled) {
+                when (side) {
+                    MascotSide.LEFT -> params.x = 0
+                    MascotSide.RIGHT -> params.x = screenW - params.width
+                    MascotSide.NONE -> Unit
+                }
+            }
+            // 展开面板后窗口变高，贴着屏幕底部时会被裁掉，这里往上挪一挪
             if (params.y + params.height > screenH - 8) {
                 params.y = (screenH - params.height - 8).coerceAtLeast(0)
             }
@@ -378,7 +515,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             } catch (_: Exception) {}
         }
 
-        val containerW = maxOf(box.width.value * currentScale, MascotLayout.BUDGET_PANEL_W)
+        val containerW = windowWidthDp(box, currentScale, panel != null)
         Box(
             modifier = Modifier.size(containerW.dp, totalH.dp)
         ) {
@@ -387,7 +524,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 Box(
                     modifier = Modifier
                         .size((box.width.value * currentScale).dp, (MascotLayout.BUBBLE_H * currentScale).dp)
-                        .align(Alignment.TopCenter),
+                        .align(contentAlign),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
@@ -412,7 +549,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             Box(
                 modifier = Modifier
                     .size((box.width.value * currentScale).dp, (box.height.value * currentScale).dp)
-                    .align(Alignment.TopCenter)
+                    .align(contentAlign)
                     .offset(y = (MascotLayout.BUBBLE_H * currentScale).dp)
                     .pointerInput(currentScale) {
                         awaitPointerEventScope {
@@ -521,6 +658,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     MascotStyle.CUSTOM -> CustomImageMascot(
                         imageUri = _imageUri,
                         mouthUri = _mouthUri,
+                        blinkUri = _blinkUri,
+                        blinkEnabled = _blinkEnabled,
                         animMode = _animMode,
                         clickJelly = _clickJelly,
                         speechVisible = mascotState.speechText != null,
@@ -535,7 +674,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             if (panel != null) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.TopCenter)
+                        .align(contentAlign)
                         .offset(y = mascotAreaH.dp)
                         .width(MascotLayout.BUDGET_PANEL_W.dp)
                 ) {
@@ -901,20 +1040,43 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val view = composeView ?: return
         val params = view.layoutParams as? WindowManager.LayoutParams ?: return
         val density = resources.displayMetrics.density
+        val screenW = resources.displayMetrics.widthPixels
         val box = MascotLayout.boxFor(effectiveStyle())
-        val widthDp = maxOf(box.width.value * scale, MascotLayout.MENU_W)
-        params.width = (widthDp * density).toInt()
+        params.width = (windowWidthDp(box, scale, _panel != null) * density).toInt()
         params.height = ((box.height.value + MascotLayout.BUBBLE_H) * density * scale).toInt()
+        // 贴边状态下改大小，必须重新顶到边框，否则会离开一条缝
+        if (_snapEnabled) {
+            when (_side) {
+                MascotSide.LEFT -> params.x = 0
+                MascotSide.RIGHT -> params.x = screenW - params.width
+                MascotSide.NONE -> Unit
+            }
+        }
         windowParams = params
         try {
             windowManager.updateViewLayout(view, params)
         } catch (_: Exception) {}
     }
 
+    /**
+     * 窗口宽度（dp）。
+     *
+     * 没展开面板时，窗口宽度就等于形象宽度（最小留 [MIN_WINDOW_W] 方便点按），
+     * 这样「窗口贴边」就等于「形象贴边」；展开预算面板时才临时变宽。
+     */
+    private fun windowWidthDp(box: MascotBox, scale: Float, panelVisible: Boolean): Float {
+        val mascotW = box.width.value * scale
+        return if (panelVisible) {
+            maxOf(mascotW, MascotLayout.BUDGET_PANEL_W)
+        } else {
+            maxOf(mascotW, MIN_WINDOW_W)
+        }
+    }
+
     private fun createLayoutParams(scale: Float): WindowManager.LayoutParams {
         val density = resources.displayMetrics.density
         val box = MascotLayout.boxFor(effectiveStyle())
-        val w = (maxOf(box.width.value * scale, MascotLayout.MENU_W) * density).toInt()
+        val w = (windowWidthDp(box, scale, false) * density).toInt()
         val h = ((box.height.value + MascotLayout.BUBBLE_H) * density * scale).toInt()
         return WindowManager.LayoutParams(
             w, h,

@@ -229,6 +229,16 @@ object MascotPrefs {
     const val KEY_SNAP_ENABLED = "mascot_snap_enabled"
     const val KEY_SNAP_EDGE = "mascot_snap_edge"
 
+    // ── 眨眼 ────────────────────────────────────────────
+    const val KEY_BLINK_URI = "mascot_blink_uri"
+    const val KEY_BLINK_ENABLED = "mascot_blink_enabled"
+
+    /** 可调节的大小范围：10% ~ 150% */
+    const val MIN_SCALE = 0.1f
+    const val MAX_SCALE = 1.5f
+
+    fun clampScale(value: Float): Float = value.coerceIn(MIN_SCALE, MAX_SCALE)
+
     fun defaults() = mapOf(
         KEY_ENABLED to true,
         KEY_SCALE to 1.0f,
@@ -241,5 +251,6 @@ object MascotPrefs {
         KEY_CLICK_JELLY to true,
         KEY_SNAP_ENABLED to true,
         KEY_SNAP_EDGE to MascotSnapEdge.LEFT.value,
+        KEY_BLINK_ENABLED to true,
     )
 }

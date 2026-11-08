@@ -171,7 +171,7 @@ fun BudgetScreen() {
             onCategoryChange = { addingFor = it },
             initial = null,
             onDismiss = { addingFor = null },
-            onSave = { amountCents, mode, dailyCents ->
+            onSave = { amountCents, mode ->
                 scope.launch {
                     withContext(Dispatchers.IO) {
                         financeDao.upsertBudget(
@@ -180,7 +180,7 @@ fun BudgetScreen() {
                                 period = period,
                                 amountCents = amountCents,
                                 dailyMode = mode,
-                                dailyAmountCents = dailyCents
+                                dailyAmountCents = 0L
                             )
                         )
                     }
@@ -199,14 +199,14 @@ fun BudgetScreen() {
             onCategoryChange = {},
             initial = row,
             onDismiss = { editing = null },
-            onSave = { amountCents, mode, dailyCents ->
+            onSave = { amountCents, mode ->
                 scope.launch {
                     withContext(Dispatchers.IO) {
                         financeDao.upsertBudget(
                             row.budget.copy(
                                 amountCents = amountCents,
                                 dailyMode = mode,
-                                dailyAmountCents = dailyCents
+                                dailyAmountCents = 0L
                             )
                         )
                     }
@@ -345,12 +345,20 @@ private fun BudgetRow(
             ) {
                 Column {
                     Text(row.category.name, fontWeight = FontWeight.Medium)
+                    val fixed = row.budget.dailyMode == MonthlyBudget.MODE_FIXED
                     Text(
                         "今日 ¥${Money.formatCents(row.todaySpentCents)} / ¥${Money.formatCents(row.dailyLimitCents)}" +
-                            "（${if (row.budget.dailyMode == MonthlyBudget.MODE_FIXED) "固定" else "动态"}）",
+                            "（${if (fixed) "固定日额度" else "动态日额度"}）",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (fixed) {
+                        Text(
+                            "每日额度 = 本月可用 ÷ 当月天数，零头分摊到前几天，结余继承到下一天",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
@@ -406,18 +414,13 @@ private fun BudgetEditDialog(
     onCategoryChange: (Category) -> Unit,
     initial: CategoryBudgetState?,
     onDismiss: () -> Unit,
-    onSave: (amountCents: Long, mode: String, dailyCents: Long) -> Unit,
+    onSave: (amountCents: Long, mode: String) -> Unit,
     onDelete: (() -> Unit)? = null
 ) {
     var amountText by remember {
         mutableStateOf(initial?.let { Money.formatCents(it.budget.amountCents) } ?: "")
     }
     var mode by remember { mutableStateOf(initial?.budget?.dailyMode ?: MonthlyBudget.MODE_DYNAMIC) }
-    var dailyText by remember {
-        mutableStateOf(
-            initial?.budget?.dailyAmountCents?.takeIf { it > 0 }?.let { Money.formatCents(it) } ?: ""
-        )
-    }
     var error by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
@@ -447,7 +450,7 @@ private fun BudgetEditDialog(
                     FilterChip(
                         selected = mode == MonthlyBudget.MODE_DYNAMIC,
                         onClick = { mode = MonthlyBudget.MODE_DYNAMIC },
-                        label = { Text("动态（剩余÷天数）") }
+                        label = { Text("动态") }
                     )
                     FilterChip(
                         selected = mode == MonthlyBudget.MODE_FIXED,
@@ -455,16 +458,17 @@ private fun BudgetEditDialog(
                         label = { Text("固定日额度") }
                     )
                 }
-                if (mode == MonthlyBudget.MODE_FIXED) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = dailyText,
-                        onValueChange = { dailyText = it },
-                        label = { Text("每天额度（元）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    if (mode == MonthlyBudget.MODE_FIXED) {
+                        "固定日额度 = 本月可用 ÷ 当月天数，自动计算，不用你填。" +
+                            "除不尽的零头会分摊到前几天，每天没用完的额度自动留给第二天。"
+                    } else {
+                        "动态日额度 = 本月剩余 ÷ 剩余天数，越花越少，每天额度会自己变。"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 error?.let {
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
@@ -479,12 +483,7 @@ private fun BudgetEditDialog(
                         error = "预算要填一个大于 0 的金额"
                         return@TextButton
                     }
-                    val daily = if (mode == MonthlyBudget.MODE_FIXED) Money.parseCents(dailyText) else null
-                    if (mode == MonthlyBudget.MODE_FIXED && daily == null) {
-                        error = "固定模式需要填每天额度"
-                        return@TextButton
-                    }
-                    onSave(amount, mode, daily ?: 0L)
+                    onSave(amount, mode)
                 }
             ) { Text("保存") }
         },

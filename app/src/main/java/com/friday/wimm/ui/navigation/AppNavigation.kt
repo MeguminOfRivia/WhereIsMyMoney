@@ -31,7 +31,7 @@ import com.friday.wimm.data.repository.CardRepository
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
     object Home : Screen("home", "首页", Icons.Default.Home)
-    object Cards : Screen("cards", "卡片", Icons.Default.List)
+    object Accounts : Screen("accounts", "账户", Icons.Default.List)
     object Import : Screen("import", "导入", Icons.Default.Add)
     object Mascot : Screen("mascot", "Wally", Icons.Default.Star)
     object Settings : Screen("settings", "设置", Icons.Default.Settings)
@@ -78,7 +78,7 @@ private fun createDefaultGlobalCard(context: android.content.Context) {
 
 @Composable
 private fun MainContent() {
-    val screens = listOf(Screen.Home, Screen.Cards, Screen.Import, Screen.Mascot, Screen.Settings)
+    val screens = listOf(Screen.Home, Screen.Accounts, Screen.Import, Screen.Mascot, Screen.Settings)
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { screens.size })
     val coroutineScope = rememberCoroutineScope()
 
@@ -151,23 +151,7 @@ private fun MainContent() {
                 ) { page ->
                     when (page) {
                         0 -> HomeScreen()
-                        1 -> CardsScreen(
-                            onCardClick = { card ->
-                                selectedCard = card
-                                currentSubPage = "card_detail"
-                                showNavBar = false
-                                anySubPageActive = true
-                            },
-                            onCreateCard = {
-                                currentSubPage = "create_card"
-                                showNavBar = false
-                                anySubPageActive = true
-                            },
-                            onSubPageChanged = { isSub ->
-                                showNavBar = !isSub
-                                anySubPageActive = isSub
-                            }
-                        )
+                        1 -> com.friday.wimm.ui.accounts.AccountsScreen()
                         2 -> ImportScreen(onSubPageChanged = { isSub ->
                             showNavBar = !isSub
                             anySubPageActive = isSub

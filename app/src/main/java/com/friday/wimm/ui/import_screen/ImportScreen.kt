@@ -37,10 +37,10 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ImportScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
+fun ImportScreen(onBack: () -> Unit = {}, onSubPageChanged: (Boolean) -> Unit = {}) {
     val application = LocalContext.current.applicationContext as MyApplication
     val viewModel: ImportViewModel = viewModel(
-        factory = ImportViewModel.Factory(application.transactionRepository)
+        factory = ImportViewModel.Factory(application)
     )
 
     val importState by viewModel.importState.collectAsState()
@@ -108,6 +108,11 @@ fun ImportScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
                     if (isSelectMode) {
                         IconButton(onClick = { isSelectMode = false; selectedIds = emptySet() }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "取消")
+                        }
+                    } else {
+                        // 现在导入页藏在「设置」里，需要自己给自己一个返回入口
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                         }
                     }
                 },
@@ -311,10 +316,17 @@ fun ImportScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(bottom = 8.dp)
                                     )
-                                    Text(
-                                        text = "新增 ${state.count} 条记录",
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
+                                     Text(
+                                         text = "新增 ${state.count} 条记录",
+                                         style = MaterialTheme.typography.bodyMedium
+                                     )
+                                     if (state.mergedCount > 0) {
+                                         Text(
+                                             text = "另有 ${state.mergedCount} 条和之前自动记下的重复，已合并（补上了商户名和交易单号）",
+                                             style = MaterialTheme.typography.bodySmall,
+                                             color = MaterialTheme.colorScheme.tertiary
+                                         )
+                                     }
                                     if (state.overlapCount > 0) {
                                         Text(
                                             text = "检测到与 ${state.overlapCount} 个已导入文件时间重叠，已自动去重",

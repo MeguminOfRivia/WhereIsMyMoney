@@ -116,8 +116,8 @@ private fun MainContent() {
     ) { innerPadding ->
         when (subPage) {
             SettingsRoutes.CATEGORIES -> CategoryRuleScreen(onBack = { closeSubPage() })
-            SettingsRoutes.IMPORT -> ImportScreen(onSubPageChanged = {})
-            SettingsRoutes.MASCOT -> MascotScreen(onSubPageChanged = {})
+            SettingsRoutes.IMPORT -> ImportScreen(onBack = { closeSubPage() }, onSubPageChanged = {})
+            SettingsRoutes.MASCOT -> MascotScreen(onBack = { closeSubPage() }, onSubPageChanged = {})
             else -> {
                 HorizontalPager(
                     state = pagerState,

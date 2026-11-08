@@ -56,6 +56,9 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.friday.wimm.data.database.DatabaseHelper
+import com.friday.wimm.data.database.FinanceDao
+import com.friday.wimm.data.database.LedgerDao
 import kotlinx.coroutines.*
 import kotlin.math.atan2
 import kotlin.math.sqrt
@@ -88,6 +91,22 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var _snapEnabled by mutableStateOf(true)
     private var _snapEdge by mutableStateOf(MascotSnapEdge.LEFT)
     private var _side by mutableStateOf(MascotSide.NONE)
+
+    // ── 预算面板（长按 / 双击弹出） ────────────────────────
+    private var _panel by mutableStateOf<BudgetPanelData?>(null)
+    private var panelHideJob: Job? = null
+
+    /**
+     * Wally 跑在 `:mascot` 进程里，读账本要自己开一份数据库连接。
+     * 只读，不写，避免和主进程互相锁住。
+     */
+    private val budgetDb by lazy { DatabaseHelper(applicationContext) }
+    private val budgetFinanceDao by lazy { FinanceDao(budgetDb) }
+    private val budgetLedgerDao by lazy { LedgerDao(budgetDb) }
+
+    // 单击 / 双击判定
+    private var lastTapAt = 0L
+    private var singleTapJob: Job? = null
 
     /**
      * 自定义形象始终有内置图兜底，所以不再回退到 Canvas 形象。
@@ -161,6 +180,15 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
         /** 离边框多近就吸附（dp） */
         private const val SNAP_THRESHOLD_DP = 56f
+
+        /** 两次抬手间隔小于这个值就算双击 */
+        private const val DOUBLE_TAP_WINDOW_MS = 280L
+
+        /** 按住多久算长按 */
+        private const val LONG_PRESS_MS = 550L
+
+        /** 预算面板自动收起时间 */
+        private const val PANEL_AUTO_HIDE_MS = 9_000L
 
         fun start(context: Context, scale: Float) {
             if (!Settings.canDrawOverlays(context)) return
@@ -323,43 +351,34 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     @Composable
     private fun MascotContent() {
-        var showMenu by remember { mutableStateOf(false) }
         val coroutineScope = rememberCoroutineScope()
-
-        // 快捷菜单的开关状态用 Compose state，点击后立即更新UI
-        var menuRandomMove by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_RANDOM_MOVE, true)) }
-        var menuSpeech by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_SPEECH, true)) }
-        var menuEyeTrack by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_EYE_TRACK, true)) }
-        var menuScale by remember { mutableFloatStateOf(scale) }
-
-        // 5秒自动关闭菜单
-        LaunchedEffect(showMenu) {
-            if (showMenu) {
-                delay(5000)
-                if (showMenu) showMenu = false
-            }
-        }
 
         val currentScale = scale
         val box = MascotLayout.boxFor(effectiveStyle())
-        val menuH = MascotLayout.MENU_H
+        val panel = _panel
+        val panelH = if (panel != null) MascotLayout.BUDGET_PANEL_H else 0f
         val mascotAreaH = (MascotLayout.BUBBLE_H + box.height.value) * currentScale
-        val totalH = if (showMenu) mascotAreaH + menuH else mascotAreaH
+        val totalH = mascotAreaH + panelH
 
-        // 调整窗口大小（向下扩展，不改y）
-        LaunchedEffect(showMenu, currentScale, box) {
+        // 调整窗口大小（向下扩展，不改 y）
+        LaunchedEffect(panel, currentScale, box) {
             val view = composeView ?: return@LaunchedEffect
             val params = windowParams ?: return@LaunchedEffect
             val density = resources.displayMetrics.density
-            val winW = maxOf(box.width.value * currentScale, MascotLayout.MENU_W)
+            val winW = maxOf(box.width.value * currentScale, MascotLayout.BUDGET_PANEL_W)
             params.width = (winW * density).toInt()
             params.height = (totalH * density).toInt()
+            // 展开面板后窗口变高，贴着屏幕底部时会被裁掉，这里往上挪一挪
+            val screenH = resources.displayMetrics.heightPixels
+            if (params.y + params.height > screenH - 8) {
+                params.y = (screenH - params.height - 8).coerceAtLeast(0)
+            }
             try {
                 windowManager.updateViewLayout(view, params)
             } catch (_: Exception) {}
         }
 
-        val containerW = maxOf(box.width.value * currentScale, MascotLayout.MENU_W)
+        val containerW = maxOf(box.width.value * currentScale, MascotLayout.BUDGET_PANEL_W)
         Box(
             modifier = Modifier.size(containerW.dp, totalH.dp)
         ) {
@@ -415,13 +434,11 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                 }
 
                                 val longPressJob = coroutineScope.launch {
-                                    delay(500L)
+                                    delay(LONG_PRESS_MS)
                                     if (!isDragging && !longPressTriggered) {
                                         longPressTriggered = true
-                                        showMenu = true
-                                        if (isSpeechEnabled()) {
-                                            showSpeech(MascotSpeech.randomLongPress())
-                                        }
+                                        // 长按 = 看今天的预算，不再弹设置菜单
+                                        showBudgetPanel()
                                     }
                                 }
 
@@ -435,7 +452,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                         if (isDragging && kotlin.math.abs(totalAngleChange) > 360f) {
                                             triggerDizzy()
                                         } else if (!isDragging && !longPressTriggered && elapsed < 500L) {
-                                            onTap()
+                                            handleTap()
                                         }
                                         // 松手：如果靠近边框就吸附过去
                                         if (isDragging) snapToNearestEdge()
@@ -514,265 +531,110 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 }
             }
 
-            // 快捷设置菜单（桌宠下方，固定大小不缩放）
-            if (showMenu) {
-                Column(
+            // 预算速览：长按或双击 Wally 弹出来
+            if (panel != null) {
+                Box(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .offset(y = mascotAreaH.dp)
-                        .width(220.dp)
-                        .shadow(8.dp, RoundedCornerShape(16.dp))
-                        .background(
-                            Color(0xFFF8F8FA),
-                            RoundedCornerShape(16.dp)
-                        )
-                        .padding(vertical = 6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .width(MascotLayout.BUDGET_PANEL_W.dp)
                 ) {
-                    // 标题栏
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "快捷设置",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF333333)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFE0E0E0))
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                    onClick = { showMenu = false }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("×", fontSize = 13.sp, color = Color(0xFF666666))
-                        }
-                    }
-
-                    HorizontalDivider(color = Color(0xFFEEEEEE), thickness = 1.dp)
-
-                    // 桌宠开关
-                    MenuSwitchRow(
-                        label = "Wally",
-                        checked = prefs.getBoolean(MascotPrefs.KEY_ENABLED, true),
-                        onCheckedChange = {
-                            prefs.edit().putBoolean(MascotPrefs.KEY_ENABLED, it).commit()
-                            if (!it) stopSelf()
-                            showMenu = false
-                        }
-                    )
-
-                    // 大小设置
-                    MenuSizeRow(
-                        currentScale = menuScale,
-                        onScaleChange = { newScale ->
-                            menuScale = newScale
-                            _scale = newScale
-                            prefs.edit().putFloat(MascotPrefs.KEY_SCALE, newScale).commit()
-                            updateMascotSize(newScale)
-                        }
-                    )
-
-                    HorizontalDivider(color = Color(0xFFEEEEEE), thickness = 1.dp)
-
-                    // 随机移动
-                    MenuSwitchRow(
-                        label = "随机移动",
-                        checked = menuRandomMove,
-                        onCheckedChange = {
-                            menuRandomMove = it
-                            prefs.edit().putBoolean(MascotPrefs.KEY_RANDOM_MOVE, it).commit()
-                        }
-                    )
-
-                    // 说话
-                    MenuSwitchRow(
-                        label = "说话",
-                        checked = menuSpeech,
-                        onCheckedChange = {
-                            menuSpeech = it
-                            prefs.edit().putBoolean(MascotPrefs.KEY_SPEECH, it).commit()
-                        }
-                    )
-
-                    // 眼睛注视
-                    MenuSwitchRow(
-                        label = "眼睛注视",
-                        checked = menuEyeTrack,
-                        onCheckedChange = {
-                            menuEyeTrack = it
-                            prefs.edit().putBoolean(MascotPrefs.KEY_EYE_TRACK, it).commit()
-                        }
-                    )
+                    BudgetPanelCard(data = panel, onClose = { hideBudgetPanel() })
                 }
             }
         }
     }
 
-    private fun onTap() {
-        // 自定义形象的点击 Q 弹反馈
+    // ── 手势：单击聊天 / 双击·长按看预算 ────────────────────
+
+    /**
+     * 抬手后先等 [DOUBLE_TAP_WINDOW_MS] 再决定是「单击」还是「双击」。
+     *
+     * 这样双击不会先触发一次单击的随机动作，用户不会觉得「我刚点两下，它先乱动了一下」。
+     */
+    private fun handleTap() {
+        val now = System.currentTimeMillis()
+        if (now - lastTapAt in 1L..DOUBLE_TAP_WINDOW_MS) {
+            lastTapAt = 0L
+            singleTapJob?.cancel()
+            showBudgetPanel()
+        } else {
+            lastTapAt = now
+            singleTapJob?.cancel()
+            singleTapJob = serviceScope.launch {
+                delay(DOUBLE_TAP_WINDOW_MS)
+                onSingleTap()
+            }
+        }
+    }
+
+    /** 单击：Q 弹一下 + 结合最近花销和预算说一句话 */
+    private fun onSingleTap() {
         mascotState.clickTick += 1
-        val interactions = listOf(
-            { triggerClickSpeech() },
-            { triggerExcitedAnimation() },
-            { triggerBouncingAnimation() },
-            { triggerAccountingAnimation() },
-            { triggerLookPhoneAnimation() },
-            { triggerCountMoneyAnimation() },
+        playRandomAnimation()
+        if (!isSpeechEnabled()) return
+        serviceScope.launch {
+            val line = withContext(Dispatchers.IO) {
+                runCatching {
+                    val data = loadBudgetPanelData(budgetFinanceDao, budgetLedgerDao)
+                    MascotSpeech.budgetChatter(
+                        hasBudget = data.hasBudget,
+                        todaySpentCents = data.todaySpentCents,
+                        todayLimitCents = data.todayLimitCents,
+                        monthRemainingCents = data.monthRemainingCents,
+                        topCategory = data.topCategory,
+                        topCategoryCents = data.topCategoryCents
+                    )
+                }.getOrElse { MascotSpeech.randomClick() }
+            }
+            showSpeech(line)
+        }
+    }
+
+    /** 随机播一个动作，但不说话（话由单击自己决定） */
+    private fun playRandomAnimation() {
+        val states = listOf(
+            AnimationState.EXCITED,
+            AnimationState.BOUNCING,
+            AnimationState.ACCOUNTING,
+            AnimationState.LOOK_PHONE,
+            AnimationState.COUNT_MONEY
         )
-        interactions.random()()
-    }
-
-    private fun triggerClickSpeech() {
-        if (isSpeechEnabled()) {
-            showSpeech(MascotSpeech.randomClick())
-        }
-        mascotState.animationState = AnimationState.EXCITED
+        val state = states.random()
+        mascotState.animationState = state
         serviceScope.launch {
-            delay(1500)
-            if (mascotState.animationState == AnimationState.EXCITED) {
+            val duration = if (state == AnimationState.EXCITED || state == AnimationState.BOUNCING) {
+                1800L
+            } else {
+                3500L
+            }
+            delay(duration)
+            if (mascotState.animationState == state) {
                 mascotState.animationState = AnimationState.IDLE
             }
         }
     }
 
-    private fun triggerExcitedAnimation() {
-        if (isSpeechEnabled()) {
-            showSpeech(MascotSpeech.randomClick())
-        }
-        mascotState.animationState = AnimationState.EXCITED
+    // ── 预算面板 ──────────────────────────────────────────
+
+    /** 长按或双击弹出：今天还能花多少 + 本月还剩多少 */
+    private fun showBudgetPanel() {
+        panelHideJob?.cancel()
         serviceScope.launch {
-            delay(2000)
-            if (mascotState.animationState == AnimationState.EXCITED) {
-                mascotState.animationState = AnimationState.IDLE
+            val data = withContext(Dispatchers.IO) {
+                runCatching { loadBudgetPanelData(budgetFinanceDao, budgetLedgerDao) }.getOrNull()
             }
+            if (data != null) _panel = data
+        }
+        panelHideJob = serviceScope.launch {
+            delay(PANEL_AUTO_HIDE_MS)
+            _panel = null
         }
     }
 
-    private fun triggerBouncingAnimation() {
-        if (isSpeechEnabled()) {
-            showSpeech(MascotSpeech.randomClick())
-        }
-        mascotState.animationState = AnimationState.BOUNCING
-        serviceScope.launch {
-            delay(2000)
-            if (mascotState.animationState == AnimationState.BOUNCING) {
-                mascotState.animationState = AnimationState.IDLE
-            }
-        }
-    }
-
-    private fun triggerAccountingAnimation() {
-        mascotState.animationState = AnimationState.ACCOUNTING
-        if (isSpeechEnabled()) {
-            showSpeech(MascotSpeech.randomForState(AnimationState.ACCOUNTING) ?: "记一笔...")
-        }
-        serviceScope.launch {
-            delay(4000)
-            if (mascotState.animationState == AnimationState.ACCOUNTING) {
-                mascotState.animationState = AnimationState.IDLE
-            }
-        }
-    }
-
-    private fun triggerLookPhoneAnimation() {
-        mascotState.animationState = AnimationState.LOOK_PHONE
-        if (isSpeechEnabled()) {
-            showSpeech(MascotSpeech.randomForState(AnimationState.LOOK_PHONE) ?: "看看手机...")
-        }
-        serviceScope.launch {
-            delay(3500)
-            if (mascotState.animationState == AnimationState.LOOK_PHONE) {
-                mascotState.animationState = AnimationState.IDLE
-            }
-        }
-    }
-
-    private fun triggerCountMoneyAnimation() {
-        mascotState.animationState = AnimationState.COUNT_MONEY
-        if (isSpeechEnabled()) {
-            showSpeech(MascotSpeech.randomForState(AnimationState.COUNT_MONEY) ?: "数钱数钱~")
-        }
-        serviceScope.launch {
-            delay(3500)
-            if (mascotState.animationState == AnimationState.COUNT_MONEY) {
-                mascotState.animationState = AnimationState.IDLE
-            }
-        }
-    }
-
-    @Composable
-    private fun MenuSwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { onCheckedChange(!checked) }
-                )
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(label, fontSize = 13.sp, color = Color(0xFF333333))
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                modifier = Modifier.height(24.dp),
-                colors = SwitchDefaults.colors(
-                    checkedTrackColor = Color(0xFF4CAF50),
-                    checkedThumbColor = Color.White
-                )
-            )
-        }
-    }
-
-    @Composable
-    private fun MenuSizeRow(currentScale: Float, onScaleChange: (Float) -> Unit) {
-        val sizeOptions = listOf(0.5f to "50%", 0.75f to "75%", 1.0f to "100%", 1.5f to "150%", 2.0f to "200%")
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp)
-        ) {
-            Text("大小", fontSize = 13.sp, color = Color(0xFF333333))
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                sizeOptions.forEach { (value, label) ->
-                    val isSelected = kotlin.math.abs(currentScale - value) < 0.01f
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(
-                                if (isSelected) Color(0xFF4CAF50)
-                                else Color(0xFFE8E8E8)
-                            )
-                            .clickable { onScaleChange(value) }
-                            .padding(horizontal = 5.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            label,
-                            fontSize = 10.sp,
-                            color = if (isSelected) Color.White else Color(0xFF666666)
-                        )
-                    }
-                }
-            }
-        }
+    private fun hideBudgetPanel() {
+        panelHideJob?.cancel()
+        _panel = null
     }
 
     private fun updateEyeOffset(touchX: Float, touchY: Float) {

@@ -293,6 +293,72 @@ class LedgerDao(private val helper: DatabaseHelper) {
         helper.writableDatabase.delete("transactions", "id = ?", arrayOf(id.toString()))
     }
 
+    // ── 导入合并 ────────────────────────────────────────────
+
+    /**
+     * 导入账单时先找一找：这笔是不是之前已经被通知/屏幕自动记下来了？
+     *
+     * 判断条件：来源是 notification、方向相同、金额差不超过 1 分、时间在 ±[windowMs] 内。
+     * 要求金额分毫不差是故意的——宁可多记一条让用户删，也不能把两笔真实消费合成一笔。
+     */
+    fun findMergeCandidate(
+        amountCents: Long,
+        type: String,
+        timestamp: Long,
+        windowMs: Long = 3 * 60_000L
+    ): com.friday.wimm.data.model.Transaction? {
+        val sql = """
+            SELECT * FROM transactions
+            WHERE dataSource = 'notification' AND type = ?
+              AND timestamp BETWEEN ? AND ?
+              AND ABS(ROUND(amount * 100) - ?) <= 1
+            ORDER BY ABS(timestamp - ?) ASC
+            LIMIT 1
+        """.trimIndent()
+        helper.readableDatabase.rawQuery(
+            sql,
+            arrayOf(
+                type,
+                (timestamp - windowMs).toString(),
+                (timestamp + windowMs).toString(),
+                amountCents.toString(),
+                timestamp.toString()
+            )
+        ).use { cursor ->
+            if (cursor.moveToFirst()) return cursor.toTransaction()
+        }
+        return null
+    }
+
+    /** 把账单里的交易单号补到自动记下的那笔上；单号已被别的记录占用时返回 false */
+    fun attachTransactionNo(id: Long, transactionNo: String?): Boolean {
+        if (transactionNo.isNullOrBlank()) return false
+        return try {
+            val values = ContentValues().apply { put("transactionNo", transactionNo) }
+            helper.writableDatabase.update("transactions", values, "id = ?", arrayOf(id.toString())) > 0
+        } catch (e: android.database.sqlite.SQLiteConstraintException) {
+            false
+        }
+    }
+
+    /** 只在原来没归属账户时才写，避免覆盖用户手动指定的账户 */
+    fun applyAccountIfUnset(id: Long, accountId: Long) {
+        if (accountId <= 0L) return
+        helper.writableDatabase.execSQL(
+            "UPDATE transactions SET accountId = ? WHERE id = ? AND (accountId IS NULL OR accountId = 0)",
+            arrayOf(accountId, id)
+        )
+    }
+
+    /** 只在原来没有大类时才写 */
+    fun applyCategoryIfUnset(id: Long, categoryId: Long?) {
+        if (categoryId == null) return
+        helper.writableDatabase.execSQL(
+            "UPDATE transactions SET categoryId = ? WHERE id = ? AND categoryId IS NULL",
+            arrayOf(categoryId, id)
+        )
+    }
+
     /**
      * 「以后都改」：把同一收款方的历史流水全部改到新大类。
      * 只动 categoryId，不动金额和时间。
@@ -313,6 +379,22 @@ class LedgerDao(private val helper: DatabaseHelper) {
     }
 
     // ── 行映射 ──────────────────────────────────────────────
+
+    private fun android.database.Cursor.toTransaction(): com.friday.wimm.data.model.Transaction =
+        com.friday.wimm.data.model.Transaction(
+            id = getLong(getColumnIndexOrThrow("id")),
+            amount = getDouble(getColumnIndexOrThrow("amount")),
+            merchant = getString(getColumnIndexOrThrow("merchant")) ?: "",
+            categoryId = getColumnIndexOrThrow("categoryId").let { if (isNull(it)) null else getLong(it) },
+            source = getString(getColumnIndexOrThrow("source")) ?: "",
+            timestamp = getLong(getColumnIndexOrThrow("timestamp")),
+            note = getString(getColumnIndexOrThrow("note")) ?: "",
+            type = getString(getColumnIndexOrThrow("type")) ?: "expense",
+            transactionNo = getString(getColumnIndexOrThrow("transactionNo")),
+            dataSource = getString(getColumnIndexOrThrow("dataSource")) ?: "file",
+            fileId = getLong(getColumnIndexOrThrow("fileId")),
+            accountId = getLong(getColumnIndexOrThrow("accountId"))
+        )
 
     private fun android.database.Cursor.toLedgerEntry(): LedgerEntry {
         val tx = com.friday.wimm.data.model.Transaction(

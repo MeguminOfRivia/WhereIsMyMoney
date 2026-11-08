@@ -34,7 +34,7 @@ fun FileAnalysisScreen(
 ) {
     val application = LocalContext.current.applicationContext as MyApplication
     val viewModel: ImportViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
-        factory = ImportViewModel.Factory(application.transactionRepository)
+        factory = ImportViewModel.Factory(application)
     )
 
     var transactions by remember { mutableStateOf<List<Transaction>>(emptyList()) }

@@ -74,6 +74,10 @@ object MascotLayout {
     const val MENU_W = 220f
     const val MENU_H = 300f
 
+    /** 预算面板宽高（dp，长按 / 双击弹出） */
+    const val BUDGET_PANEL_W = 236f
+    const val BUDGET_PANEL_H = 176f
+
     fun boxFor(style: MascotStyle): MascotBox = when (style) {
         MascotStyle.BUILTIN -> BUILTIN_BOX
         MascotStyle.CUSTOM -> CUSTOM_BOX

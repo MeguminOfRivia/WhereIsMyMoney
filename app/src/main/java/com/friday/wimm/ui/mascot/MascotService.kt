@@ -102,8 +102,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var _snapEdge by mutableStateOf(MascotSnapEdge.LEFT)
     private var _side by mutableStateOf(MascotSide.NONE)
 
-    // ── 预算面板（长按 / 双击弹出） ────────────────────────
+    // ── 预算面板（双击看今天 / 长按看本月） ────────────────
     private var _panel by mutableStateOf<BudgetPanelData?>(null)
+    private var _panelMode by mutableStateOf(BudgetPanelMode.TODAY)
     private var panelHideJob: Job? = null
 
     /**
@@ -574,8 +575,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                     delay(LONG_PRESS_MS)
                                     if (!isDragging && !longPressTriggered) {
                                         longPressTriggered = true
-                                        // 长按 = 看今天的预算，不再弹设置菜单
-                                        showBudgetPanel()
+                                        // 长按 = 看本月
+                                        showBudgetPanel(BudgetPanelMode.MONTH)
                                     }
                                 }
 
@@ -671,7 +672,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 }
             }
 
-            // 预算速览：长按或双击 Wally 弹出来
+            // 预算速览：双击看今天，长按看本月
             if (panel != null) {
                 Box(
                     modifier = Modifier
@@ -679,7 +680,11 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         .offset(y = mascotAreaH.dp)
                         .width(MascotLayout.BUDGET_PANEL_W.dp)
                 ) {
-                    BudgetPanelCard(data = panel, onClose = { hideBudgetPanel() })
+                    BudgetPanelCard(
+                        data = panel,
+                        mode = _panelMode,
+                        onClose = { hideBudgetPanel() }
+                    )
                 }
             }
         }
@@ -697,7 +702,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         if (now - lastTapAt in 1L..DOUBLE_TAP_WINDOW_MS) {
             lastTapAt = 0L
             singleTapJob?.cancel()
-            showBudgetPanel()
+            // 双击 = 看今天
+            showBudgetPanel(BudgetPanelMode.TODAY)
         } else {
             lastTapAt = now
             singleTapJob?.cancel()
@@ -708,7 +714,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
     }
 
-    /** 单击：Q 弹一下 + 结合最近花销和预算说一句话 */
+    /** 单击：Q 弹一下 + 说一句和记账有关的小话（不报数字） */
     private fun onSingleTap() {
         mascotState.clickTick += 1
         playRandomAnimation()
@@ -717,13 +723,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             val line = withContext(Dispatchers.IO) {
                 runCatching {
                     val data = loadBudgetPanelData(budgetFinanceDao, budgetLedgerDao)
-                    MascotSpeech.budgetChatter(
+                    MascotSpeech.smallTalk(
                         hasBudget = data.hasBudget,
-                        todaySpentCents = data.todaySpentCents,
-                        todayLimitCents = data.todayLimitCents,
-                        monthRemainingCents = data.monthRemainingCents,
-                        topCategory = data.topCategory,
-                        topCategoryCents = data.topCategoryCents
+                        overBudgetToday = data.hasBudget && data.todayRemainingCents < 0
                     )
                 }.getOrElse { MascotSpeech.randomClick() }
             }
@@ -757,8 +759,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     // ── 预算面板 ──────────────────────────────────────────
 
-    /** 长按或双击弹出：今天还能花多少 + 本月还剩多少 */
-    private fun showBudgetPanel() {
+    /** 双击弹「今天」，长按弹「本月」 */
+    private fun showBudgetPanel(mode: BudgetPanelMode) {
+        _panelMode = mode
         panelHideJob?.cancel()
         serviceScope.launch {
             val data = withContext(Dispatchers.IO) {

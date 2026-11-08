@@ -80,6 +80,12 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             db.execSQL(SQL_CREATE_BUDGET_ADJUSTMENTS)
             seedDefaults(db)
         }
+        if (oldVersion < 10) {
+            // 升级到版本10：默认账户改名，从「微信零钱 / 支付宝花呗」简化成「微信 / 支付宝」。
+            // 只在名字和类型都对得上时才改，用户自己改过名字的不动。
+            db.execSQL("UPDATE accounts SET name = '微信' WHERE name = '微信零钱' AND type = 'wechat'")
+            db.execSQL("UPDATE accounts SET name = '支付宝' WHERE name = '支付宝花呗' AND type = 'alipay'")
+        }
     }
 
     /**
@@ -95,12 +101,12 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             db.execSQL(
                 "INSERT INTO accounts(name, type, initialBalanceCents, balanceStartAt, archived, createdAt, sortOrder) " +
                     "VALUES(?, ?, 0, ?, 0, ?, 0)",
-                arrayOf("微信零钱", Account.TYPE_WECHAT, now, now)
+                arrayOf("微信", Account.TYPE_WECHAT, now, now)
             )
             db.execSQL(
                 "INSERT INTO accounts(name, type, initialBalanceCents, balanceStartAt, archived, createdAt, sortOrder) " +
                     "VALUES(?, ?, 0, ?, 0, ?, 1)",
-                arrayOf("支付宝花呗", Account.TYPE_ALIPAY, now, now)
+                arrayOf("支付宝", Account.TYPE_ALIPAY, now, now)
             )
         }
 
@@ -894,7 +900,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         )
 
         const val DATABASE_NAME = "expense_database"
-        const val DATABASE_VERSION = 9
+        const val DATABASE_VERSION = 10
 
         /** 把历史重复交易号的「后来者」置空，保证唯一索引能建起来（不会删除任何记录） */
         private const val SQL_DEDUP_TRANSACTION_NO = """

@@ -1,6 +1,7 @@
 package com.friday.wimm.ui.mascot
 
 import androidx.compose.runtime.*
+import kotlin.random.Random
 
 enum class AnimationState {
     IDLE, SPINNING, BOUNCING, SLEEPING, EXCITED, DIZZY,
@@ -123,67 +124,53 @@ object MascotSpeech {
     fun randomLongPress() = longPressPhrases.random()
 
     /**
-     * 点一下 Wally 时说的话——不是随便挑一句，而是「看着你的账本说话」。
+     * 点一下 Wally 时说的话。
      *
-     * 依据：今天花了多少、今天还能花多少、这个月还剩多少、今天最大的一笔是哪类。
-     * 气泡只有两行，所以每句都控制在 30 字以内。
+     * 刻意**不带任何数字、金额和分类名**——气泡只有两行，报数字会挤成一坨，
+     * 而且看数字有双击/长按的预算面板。这里只说和花钱有关的小话。
+     * 唯一参考的状态是「今天有没有超」，用来在两种语气之间挑一句。
      */
-    fun budgetChatter(
-        hasBudget: Boolean,
-        todaySpentCents: Long,
-        todayLimitCents: Long,
-        monthRemainingCents: Long,
-        topCategory: String?,
-        topCategoryCents: Long
-    ): String {
-        fun yuan(cents: Long): String =
-            String.format(java.util.Locale.US, "%.2f", cents / 100.0)
-
-        if (!hasBudget) {
-            return listOf(
-                "还没设预算，去「预算」页设一个？",
-                "没有预算，我只能看着你花钱了…",
-                "不知道还能花多少，要不先定个预算？"
-            ).random()
-        }
-
-        val todayRemaining = todayLimitCents - todaySpentCents
-        val overMonth = monthRemainingCents < 0
-
-        return when {
-            todaySpentCents <= 0L -> listOf(
-                "今天还没花钱，保持住！",
-                "一分没花，今天很棒~"
-            ).random()
-
-            todayRemaining < 0L -> listOf(
-                "今天超了 ¥${yuan(-todayRemaining)}，明天省点",
-                "坏了，今天超标 ¥${yuan(-todayRemaining)}"
-            ).random()
-
-            todayLimitCents > 0L && todayRemaining * 5L < todayLimitCents -> listOf(
-                "今天只剩 ¥${yuan(todayRemaining)} 了，悠着点",
-                "额度快见底，还能花 ¥${yuan(todayRemaining)}"
-            ).random()
-
-            topCategory != null && topCategoryCents > 0L && topCategoryCents * 2L > todaySpentCents -> listOf(
-                "「$topCategory」花了 ¥${yuan(topCategoryCents)}，今天还能花 ¥${yuan(todayRemaining)}",
-                "大头在「$topCategory」¥${yuan(topCategoryCents)}，今天剩 ¥${yuan(todayRemaining)}"
-            ).random()
-
-            else -> listOf(
-                "今天花了 ¥${yuan(todaySpentCents)}，还能花 ¥${yuan(todayRemaining)}",
-                "今天花掉 ¥${yuan(todaySpentCents)}，还剩 ¥${yuan(todayRemaining)}"
-            ).random()
-        }.let { line ->
-            when {
-                overMonth -> "$line 本月也超支了…"
-                monthRemainingCents > 0L && monthRemainingCents < todayLimitCents * 2L &&
-                    line.length < 20 -> "$line 本月也快见底"
-                else -> line
-            }
-        }
+    fun smallTalk(hasBudget: Boolean, overBudgetToday: Boolean): String {
+        if (!hasBudget) return noBudgetTalk.random()
+        if (overBudgetToday) return overBudgetTalk.random()
+        return if (Random.nextFloat() < 0.55f) underBudgetTalk.random() else dailyTalk.random()
     }
+
+    private val dailyTalk = listOf(
+        "今天吃了吗？",
+        "控制饮食，就是控制钱包",
+        "记账了吗？",
+        "还有什么要买的吗？",
+        "别冲动消费啊",
+        "钱要花在刀刃上",
+        "买之前先想想",
+        "今天也要好好记账哦",
+        "省下来的才是自己的",
+        "钱包在看着你哦",
+        "有没有乱花钱呀？",
+        "今天过得怎么样？"
+    )
+
+    private val overBudgetTalk = listOf(
+        "今天又超支了噢…",
+        "今天好像花多了",
+        "钱包有点疼…",
+        "明天要省着点啦",
+        "悠着点，钱不经花"
+    )
+
+    private val underBudgetTalk = listOf(
+        "今天还有盈余，不错嘛",
+        "今天花得挺克制！",
+        "钱包今天很开心",
+        "继续保持哦~"
+    )
+
+    private val noBudgetTalk = listOf(
+        "还没设预算，去「预算」页设一个？",
+        "定个预算吧，我帮你盯着",
+        "没有预算，我可管不住你的手"
+    )
 
     fun randomGreeting(): String {
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)

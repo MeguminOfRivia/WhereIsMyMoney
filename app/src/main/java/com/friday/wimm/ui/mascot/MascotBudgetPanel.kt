@@ -35,8 +35,13 @@ import com.friday.wimm.util.BudgetMath
 import com.friday.wimm.util.Money
 import java.time.LocalDate
 
+/** 双击看今天，长按看本月 */
+enum class BudgetPanelMode { TODAY, MONTH }
+
+data class CategoryLine(val name: String, val cents: Long)
+
 /**
- * 长按 / 双击 Wally 弹出来的「今天 + 这个月」预算速览。
+ * Wally 弹出来的预算速览。
  *
  * 注意：Wally 跑在 `:mascot` 进程里，这里读的是同一个 SQLite 文件。
  * 只读不写，不会和主进程抢锁。
@@ -49,8 +54,10 @@ data class BudgetPanelData(
     val monthSpentCents: Long,
     val monthAvailableCents: Long,
     val monthRemainingCents: Long,
-    val topCategory: String?,
-    val topCategoryCents: Long
+    val carryInCents: Long,
+    val adjustCents: Long,
+    val topToday: CategoryLine?,
+    val topMonth: List<CategoryLine>
 ) {
     val todayRemainingCents: Long get() = todayLimitCents - todaySpentCents
     val todayProgress: Float
@@ -72,19 +79,24 @@ fun loadBudgetPanelData(financeDao: FinanceDao, ledgerDao: LedgerDao): BudgetPan
     val today = LocalDate.now()
     val period = BudgetMath.periodOf(today)
     val snapshot = BudgetPlanner.snapshot(financeDao, period, today)
-    val (from, to) = LedgerDao.dayRange(today)
-    val breakdown = ledgerDao.categoryBreakdown(LedgerFilter(fromTs = from, toTs = to))
-    val top = breakdown.firstOrNull()
+
+    val (todayFrom, todayTo) = LedgerDao.dayRange(today)
+    val (monthFrom, monthTo) = LedgerDao.monthRange(period)
+    val todayBreakdown = ledgerDao.categoryBreakdown(LedgerFilter(fromTs = todayFrom, toTs = todayTo))
+    val monthBreakdown = ledgerDao.categoryBreakdown(LedgerFilter(fromTs = monthFrom, toTs = monthTo))
+
     return BudgetPanelData(
         period = period,
         hasBudget = snapshot.hasBudget,
-        todaySpentCents = breakdown.sumOf { it.cents },
+        todaySpentCents = todayBreakdown.sumOf { it.cents },
         todayLimitCents = snapshot.totalDailyLimitCents,
         monthSpentCents = snapshot.totalSpentCents,
         monthAvailableCents = snapshot.totalAvailableCents,
         monthRemainingCents = snapshot.totalRemainingCents,
-        topCategory = top?.name,
-        topCategoryCents = top?.cents ?: 0L
+        carryInCents = snapshot.totalCarryInCents,
+        adjustCents = snapshot.totalAdjustCents,
+        topToday = todayBreakdown.firstOrNull()?.let { CategoryLine(it.name, it.cents) },
+        topMonth = monthBreakdown.take(3).map { CategoryLine(it.name, it.cents) }
     )
 }
 
@@ -94,7 +106,11 @@ private val PanelError = Color(0xFFE53935)
 private val PanelOk = Color(0xFF43A047)
 
 @Composable
-fun BudgetPanelCard(data: BudgetPanelData, onClose: () -> Unit) {
+fun BudgetPanelCard(
+    data: BudgetPanelData,
+    mode: BudgetPanelMode,
+    onClose: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -107,7 +123,15 @@ fun BudgetPanelCard(data: BudgetPanelData, onClose: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("预算速览", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PanelText)
+            Text(
+                when (mode) {
+                    BudgetPanelMode.TODAY -> "今日预算"
+                    BudgetPanelMode.MONTH -> "本月预算"
+                },
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = PanelText
+            )
             Box(
                 modifier = Modifier
                     .size(18.dp)
@@ -128,7 +152,7 @@ fun BudgetPanelCard(data: BudgetPanelData, onClose: () -> Unit) {
 
         if (!data.hasBudget) {
             Text(
-                "还没设预算。\n去「预算」页给几个大类定个额度，\n我就能提醒你今天还能花多少了。",
+                "还没设预算。\n去「预算」页给几个大类定个额度，\n我就能提醒你还能花多少了。",
                 fontSize = 11.sp,
                 color = PanelSub,
                 lineHeight = 15.sp
@@ -142,89 +166,128 @@ fun BudgetPanelCard(data: BudgetPanelData, onClose: () -> Unit) {
             return@Column
         }
 
-        // 今日
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom
-        ) {
-            Text("今天", fontSize = 12.sp, color = PanelSub)
-            Text(
-                if (data.todayRemainingCents >= 0) {
-                    "还能花 ¥${Money.formatCents(data.todayRemainingCents)}"
-                } else {
-                    "超了 ¥${Money.formatCents(-data.todayRemainingCents)}"
-                },
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (data.todayRemainingCents >= 0) PanelOk else PanelError
-            )
+        when (mode) {
+            BudgetPanelMode.TODAY -> TodaySection(data)
+            BudgetPanelMode.MONTH -> MonthSection(data)
         }
-        Spacer(modifier = Modifier.height(3.dp))
-        LinearProgressIndicator(
-            progress = { data.todayProgress },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(CircleShape),
-            color = if (data.todayRemainingCents >= 0) PanelOk else PanelError,
-            trackColor = Color(0xFFEDEDED)
+    }
+}
+
+@Composable
+private fun TodaySection(data: BudgetPanelData) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom
+    ) {
+        Text("今天", fontSize = 12.sp, color = PanelSub)
+        Text(
+            if (data.todayRemainingCents >= 0) {
+                "还能花 ¥${Money.formatCents(data.todayRemainingCents)}"
+            } else {
+                "超了 ¥${Money.formatCents(-data.todayRemainingCents)}"
+            },
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (data.todayRemainingCents >= 0) PanelOk else PanelError
         )
+    }
+    Spacer(modifier = Modifier.height(4.dp))
+    LinearProgressIndicator(
+        progress = { data.todayProgress },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(7.dp)
+            .clip(CircleShape),
+        color = if (data.todayRemainingCents >= 0) PanelOk else PanelError,
+        trackColor = Color(0xFFEDEDED)
+    )
+    Spacer(modifier = Modifier.height(3.dp))
+    Text(
+        "已花 ¥${Money.formatCents(data.todaySpentCents)} / 今日额度 ¥${Money.formatCents(data.todayLimitCents)}",
+        fontSize = 10.sp,
+        color = PanelSub
+    )
+    data.topToday?.let {
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            "今天花最多：${it.name} ¥${Money.formatCents(it.cents)}",
+            fontSize = 10.sp,
+            color = PanelSub,
+            maxLines = 1
+        )
+    }
+    Spacer(modifier = Modifier.height(6.dp))
+    Text("长按我，看本月", fontSize = 9.sp, color = Color(0xFFBBBBBB))
+}
+
+@Composable
+private fun MonthSection(data: BudgetPanelData) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom
+    ) {
+        Text("本月", fontSize = 12.sp, color = PanelSub)
+        Text(
+            if (data.monthRemainingCents >= 0) {
+                "还剩 ¥${Money.formatCents(data.monthRemainingCents)}"
+            } else {
+                "超支 ¥${Money.formatCents(-data.monthRemainingCents)}"
+            },
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (data.monthRemainingCents >= 0) PanelOk else PanelError
+        )
+    }
+    Spacer(modifier = Modifier.height(4.dp))
+    LinearProgressIndicator(
+        progress = { data.monthProgress },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(7.dp)
+            .clip(CircleShape),
+        color = if (data.monthRemainingCents >= 0) PanelOk else PanelError,
+        trackColor = Color(0xFFEDEDED)
+    )
+    Spacer(modifier = Modifier.height(3.dp))
+    Text(
+        "已花 ¥${Money.formatCents(data.monthSpentCents)} / 可用 ¥${Money.formatCents(data.monthAvailableCents)}",
+        fontSize = 10.sp,
+        color = PanelSub
+    )
+
+    if (data.carryInCents != 0L || data.adjustCents != 0L) {
         Spacer(modifier = Modifier.height(2.dp))
         Text(
-            "已花 ¥${Money.formatCents(data.todaySpentCents)} / 额度 ¥${Money.formatCents(data.todayLimitCents)}",
-            fontSize = 10.sp,
-            color = PanelSub
+            "含结转 ¥${Money.formatCents(data.carryInCents)}，手动调整 ¥${Money.formatCents(data.adjustCents)}",
+            fontSize = 9.sp,
+            color = PanelSub,
+            maxLines = 1
         )
+    }
 
+    if (data.topMonth.isNotEmpty()) {
         HorizontalDivider(
             modifier = Modifier.padding(vertical = 6.dp),
             color = Color(0xFFEEEEEE)
         )
-
-        // 本月
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom
-        ) {
-            Text("本月", fontSize = 12.sp, color = PanelSub)
-            Text(
-                if (data.monthRemainingCents >= 0) {
-                    "还剩 ¥${Money.formatCents(data.monthRemainingCents)}"
-                } else {
-                    "超支 ¥${Money.formatCents(-data.monthRemainingCents)}"
-                },
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (data.monthRemainingCents >= 0) PanelOk else PanelError
-            )
-        }
-        Spacer(modifier = Modifier.height(3.dp))
-        LinearProgressIndicator(
-            progress = { data.monthProgress },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(CircleShape),
-            color = if (data.monthRemainingCents >= 0) PanelOk else PanelError,
-            trackColor = Color(0xFFEDEDED)
-        )
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            "已花 ¥${Money.formatCents(data.monthSpentCents)} / 可用 ¥${Money.formatCents(data.monthAvailableCents)}",
-            fontSize = 10.sp,
-            color = PanelSub
-        )
-
-        if (data.topCategory != null) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "今天花最多：${data.topCategory} ¥${Money.formatCents(data.topCategoryCents)}",
-                fontSize = 10.sp,
-                color = PanelSub,
-                maxLines = 1
-            )
+        data.topMonth.forEach { line ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 1.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(line.name, fontSize = 10.sp, color = PanelSub, maxLines = 1)
+                Text(
+                    "¥${Money.formatCents(line.cents)}",
+                    fontSize = 10.sp,
+                    color = PanelText
+                )
+            }
         }
     }
+    Spacer(modifier = Modifier.height(6.dp))
+    Text("双击我，看今天", fontSize = 9.sp, color = Color(0xFFBBBBBB))
 }

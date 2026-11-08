@@ -225,9 +225,19 @@ object MascotImageLoader {
      */
     private fun trimTransparent(context: Context, drawable: Drawable): Drawable {
         val bitmap = (drawable as? BitmapDrawable)?.bitmap ?: return drawable
+        // 硬件位图不允许 getPixels()，遇到就原样返回
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            bitmap.config == android.graphics.Bitmap.Config.HARDWARE
+        ) {
+            return drawable
+        }
+        return runCatching { doTrim(context, bitmap) }.getOrDefault(drawable)
+    }
+
+    private fun doTrim(context: Context, bitmap: android.graphics.Bitmap): Drawable {
         val width = bitmap.width
         val height = bitmap.height
-        if (width < 4 || height < 4) return drawable
+        if (width < 4 || height < 4) return BitmapDrawable(context.resources, bitmap)
 
         var left = width
         var top = height
@@ -246,15 +256,15 @@ object MascotImageLoader {
                 }
             }
         }
-        if (right < left || bottom < top) return drawable
-        if (left == 0 && top == 0 && right == width - 1 && bottom == height - 1) return drawable
+        if (right < left || bottom < top) return BitmapDrawable(context.resources, bitmap)
+        if (left == 0 && top == 0 && right == width - 1 && bottom == height - 1) {
+            return BitmapDrawable(context.resources, bitmap)
+        }
 
-        return runCatching {
-            val cropped = android.graphics.Bitmap.createBitmap(
-                bitmap, left, top, right - left + 1, bottom - top + 1
-            )
-            BitmapDrawable(context.resources, cropped)
-        }.getOrDefault(drawable)
+        val cropped = android.graphics.Bitmap.createBitmap(
+            bitmap, left, top, right - left + 1, bottom - top + 1
+        )
+        return BitmapDrawable(context.resources, cropped)
     }
 
     private fun decode(context: Context, uri: Uri): Drawable? {

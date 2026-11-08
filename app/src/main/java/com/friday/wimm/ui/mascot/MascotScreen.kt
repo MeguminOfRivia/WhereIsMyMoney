@@ -60,6 +60,14 @@ fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
         )
     }
     var clickJelly by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_CLICK_JELLY, true)) }
+    var snapEnabled by remember { mutableStateOf(prefs.getBoolean(MascotPrefs.KEY_SNAP_ENABLED, true)) }
+    var snapEdge by remember {
+        mutableStateOf(
+            MascotSnapEdge.from(
+                prefs.getString(MascotPrefs.KEY_SNAP_EDGE, MascotSnapEdge.LEFT.value)
+            )
+        )
+    }
     var previewSpeech by remember { mutableStateOf(false) }
 
     /** 选图后要长期保留访问权限，否则重启 App 就读不到了 */
@@ -109,6 +117,10 @@ fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
             prefs.getString(MascotPrefs.KEY_ANIM_MODE, MascotAnimMode.JELLY.value)
         )
         clickJelly = prefs.getBoolean(MascotPrefs.KEY_CLICK_JELLY, true)
+        snapEnabled = prefs.getBoolean(MascotPrefs.KEY_SNAP_ENABLED, true)
+        snapEdge = MascotSnapEdge.from(
+            prefs.getString(MascotPrefs.KEY_SNAP_EDGE, MascotSnapEdge.LEFT.value)
+        )
     }
 
     // 动画预览状态
@@ -197,7 +209,7 @@ fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
                         .weight(1f),
                     contentAlignment = Alignment.BottomCenter
                 ) {
-                    if (style == MascotStyle.CUSTOM && !imageUri.isNullOrBlank()) {
+                    if (style == MascotStyle.CUSTOM) {
                         CustomImageMascot(
                             imageUri = imageUri,
                             mouthUri = mouthUri,
@@ -205,6 +217,7 @@ fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
                             clickJelly = false,
                             speechVisible = previewSpeech || previewState.speechText != null,
                             clickTick = 0,
+                            flipHorizontal = false,
                             modifier = Modifier
                                 .size(130.dp, 155.dp)
                                 .graphicsLayer {
@@ -470,6 +483,49 @@ fun MascotScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
                     if (enabled) MascotService.notifySettingsChanged(context)
                 }
             )
+
+            Spacer(modifier = Modifier.height(12.dp))
+            SettingSwitchItem(
+                title = "贴边吸附",
+                subtitle = "拖到屏幕边缘附近会自动贴边，左右切换时自动左右翻转",
+                checked = snapEnabled,
+                onCheckedChange = {
+                    snapEnabled = it
+                    prefs.edit().putBoolean(MascotPrefs.KEY_SNAP_ENABLED, it).commit()
+                    if (enabled) MascotService.notifySettingsChanged(context)
+                }
+            )
+
+            if (snapEnabled) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("图片哪一边贴着屏幕边框", style = MaterialTheme.typography.bodyMedium)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = snapEdge == MascotSnapEdge.LEFT,
+                        onClick = {
+                            snapEdge = MascotSnapEdge.LEFT
+                            prefs.edit().putString(MascotPrefs.KEY_SNAP_EDGE, snapEdge.value).commit()
+                            if (enabled) MascotService.notifySettingsChanged(context)
+                        },
+                        label = { Text("图片左边贴边") }
+                    )
+                    FilterChip(
+                        selected = snapEdge == MascotSnapEdge.RIGHT,
+                        onClick = {
+                            snapEdge = MascotSnapEdge.RIGHT
+                            prefs.edit().putString(MascotPrefs.KEY_SNAP_EDGE, snapEdge.value).commit()
+                            if (enabled) MascotService.notifySettingsChanged(context)
+                        },
+                        label = { Text("图片右边贴边") }
+                    )
+                }
+                Text(
+                    "选了哪一边，Wally 贴左边框和贴右边框时都会让这一侧朝外，所以换边时会自动翻转。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedButton(

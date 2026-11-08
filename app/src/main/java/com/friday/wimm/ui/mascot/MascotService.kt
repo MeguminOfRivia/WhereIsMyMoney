@@ -78,26 +78,48 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private val scale: Float get() = _scale
 
     // ── 形象外观（跨进程通过广播刷新） ──────────────────────
-    private var _style by mutableStateOf(MascotStyle.BUILTIN)
+    private var _style by mutableStateOf(MascotStyle.CUSTOM)
     private var _imageUri by mutableStateOf<String?>(null)
     private var _mouthUri by mutableStateOf<String?>(null)
     private var _animMode by mutableStateOf(MascotAnimMode.JELLY)
     private var _clickJelly by mutableStateOf(true)
 
-    /** 选了"自定义"但还没挑图片时，回退到内置形象 */
-    private fun effectiveStyle(): MascotStyle =
-        if (_style == MascotStyle.CUSTOM && _imageUri.isNullOrBlank()) MascotStyle.BUILTIN else _style
+    // ── 贴边吸附 ──────────────────────────────────────────
+    private var _snapEnabled by mutableStateOf(true)
+    private var _snapEdge by mutableStateOf(MascotSnapEdge.LEFT)
+    private var _side by mutableStateOf(MascotSide.NONE)
+
+    /**
+     * 自定义形象始终有内置图兜底，所以不再回退到 Canvas 形象。
+     */
+    private fun effectiveStyle(): MascotStyle = _style
+
+    /**
+     * 当「贴着的边」和「图片哪一边该贴边」不一致时，水平镜像。
+     *
+     * 例：用户选的图要「右边贴边」，此时贴在左侧，就必须翻过来。
+     */
+    private fun shouldFlip(): Boolean = when (_side) {
+        MascotSide.LEFT -> _snapEdge == MascotSnapEdge.RIGHT
+        MascotSide.RIGHT -> _snapEdge == MascotSnapEdge.LEFT
+        MascotSide.NONE -> false
+    }
 
     private fun reloadAppearance() {
         prefs.edit().commit()
         _scale = prefs.getFloat(MascotPrefs.KEY_SCALE, 1.0f)
-        _style = MascotStyle.from(prefs.getString(MascotPrefs.KEY_STYLE, MascotStyle.BUILTIN.value))
+        _style = MascotStyle.from(prefs.getString(MascotPrefs.KEY_STYLE, MascotStyle.CUSTOM.value))
         _imageUri = prefs.getString(MascotPrefs.KEY_IMAGE_URI, null)
         _mouthUri = prefs.getString(MascotPrefs.KEY_MOUTH_URI, null)
         _animMode = MascotAnimMode.from(
             prefs.getString(MascotPrefs.KEY_ANIM_MODE, MascotAnimMode.JELLY.value)
         )
         _clickJelly = prefs.getBoolean(MascotPrefs.KEY_CLICK_JELLY, true)
+        _snapEnabled = prefs.getBoolean(MascotPrefs.KEY_SNAP_ENABLED, true)
+        _snapEdge = MascotSnapEdge.from(
+            prefs.getString(MascotPrefs.KEY_SNAP_EDGE, MascotSnapEdge.LEFT.value)
+        )
+        if (!_snapEnabled) _side = MascotSide.NONE
     }
 
     private val prefs by lazy { getSharedPreferences(MascotPrefs.NAME, Context.MODE_MULTI_PROCESS) }
@@ -136,6 +158,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         const val MASCOT_W = 184
         const val MASCOT_H = 100
         const val BUBBLE_H = 70
+
+        /** 离边框多近就吸附（dp） */
+        private const val SNAP_THRESHOLD_DP = 56f
 
         fun start(context: Context, scale: Float) {
             if (!Settings.canDrawOverlays(context)) return
@@ -291,6 +316,9 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         try {
             windowManager.addView(composeView, params)
         } catch (_: Exception) {}
+
+        // 初始位置固定在左上角附近，默认视为贴在左侧
+        _side = if (_snapEnabled && params.x <= 0) MascotSide.LEFT else MascotSide.NONE
     }
 
     @Composable
@@ -409,6 +437,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                         } else if (!isDragging && !longPressTriggered && elapsed < 500L) {
                                             onTap()
                                         }
+                                        // 松手：如果靠近边框就吸附过去
+                                        if (isDragging) snapToNearestEdge()
 
                                         serviceScope.launch {
                                             delay(1500)
@@ -478,6 +508,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         clickJelly = _clickJelly,
                         speechVisible = mascotState.speechText != null,
                         clickTick = mascotState.clickTick,
+                        flipHorizontal = shouldFlip(),
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -905,8 +936,14 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
                 val maxMoveX = screenWidth * 0.4f
                 val maxMoveY = screenHeight * 0.3f
-                val targetX = (fromX + Random.nextInt(-maxMoveX.toInt(), maxMoveX.toInt()))
-                    .coerceIn(0, (screenWidth - winW).coerceAtLeast(1))
+                // 已贴边时只上下挪，避免随机移动把"靠边"破坏掉
+                val keepSide = _snapEnabled && _side != MascotSide.NONE
+                val targetX = if (keepSide) {
+                    fromX
+                } else {
+                    (fromX + Random.nextInt(-maxMoveX.toInt(), maxMoveX.toInt()))
+                        .coerceIn(0, (screenWidth - winW).coerceAtLeast(1))
+                }
                 val targetY = (fromY + Random.nextInt(-maxMoveY.toInt(), maxMoveY.toInt()))
                     .coerceIn(100, (screenHeight - winH - 100).coerceAtLeast(200))
 
@@ -933,6 +970,68 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 windowManager.updateViewLayout(composeView, params)
             } catch (_: Exception) {}
             delay(16)
+        }
+    }
+
+    /**
+     * 松手后判断是否要贴边。
+     *
+     * 规则：离最近的水平边小于阈值就贴过去，并记录贴的是哪一侧；
+     * 同一侧一旦确定，[shouldFlip] 会保证"图片该贴边的那一侧"始终朝向边框。
+     */
+    private fun snapToNearestEdge() {
+        if (!_snapEnabled) {
+            _side = MascotSide.NONE
+            return
+        }
+        val params = windowParams ?: return
+        val metrics = resources.displayMetrics
+        val screenW = metrics.widthPixels
+        val screenH = metrics.heightPixels
+        val threshold = SNAP_THRESHOLD_DP * metrics.density
+
+        var targetX = params.x
+        var side = MascotSide.NONE
+        val leftGap = params.x.toFloat()
+        val rightGap = (screenW - params.x - params.width).toFloat()
+        if (leftGap <= threshold && leftGap <= rightGap) {
+            targetX = 0
+            side = MascotSide.LEFT
+        } else if (rightGap <= threshold) {
+            targetX = screenW - params.width
+            side = MascotSide.RIGHT
+        }
+
+        var targetY = params.y
+        val topGap = params.y.toFloat()
+        val bottomGap = (screenH - params.y - params.height).toFloat()
+        if (topGap <= threshold && topGap <= bottomGap) {
+            targetY = 0
+        } else if (bottomGap <= threshold) {
+            targetY = screenH - params.height
+        }
+
+        _side = side
+        animateWindowTo(targetX, targetY)
+    }
+
+    private fun animateWindowTo(targetX: Int, targetY: Int) {
+        val params = windowParams ?: return
+        val startX = params.x
+        val startY = params.y
+        if (startX == targetX && startY == targetY) return
+        serviceScope.launch {
+            val steps = 10
+            for (i in 1..steps) {
+                val t = i.toFloat() / steps
+                val eased = t * t * (3f - 2f * t)
+                params.x = (startX + (targetX - startX) * eased).toInt()
+                params.y = (startY + (targetY - startY) * eased).toInt()
+                try {
+                    windowManager.updateViewLayout(composeView, params)
+                } catch (_: Exception) {}
+                delay(14)
+            }
         }
     }
 

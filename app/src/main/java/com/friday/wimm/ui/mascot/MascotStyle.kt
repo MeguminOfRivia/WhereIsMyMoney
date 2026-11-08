@@ -39,6 +39,25 @@ enum class MascotAnimMode(val value: String) {
 data class MascotBox(val width: Dp, val height: Dp)
 
 /**
+ * 自定义形象「哪一条边贴着屏幕边框」。
+ *
+ * 用户选一张图后，图的左右两侧往往不对称（角色可能侧身），
+ * 需要告诉 Wally：贴左边框和贴右边框时，应该让图的哪一侧靠墙。
+ */
+enum class MascotSnapEdge(val value: String) {
+    LEFT("left"),
+    RIGHT("right");
+
+    companion object {
+        fun from(value: String?): MascotSnapEdge =
+            entries.firstOrNull { it.value == value } ?: LEFT
+    }
+}
+
+/** Wally 当前贴着哪一侧（未贴边时为 NONE） */
+enum class MascotSide { NONE, LEFT, RIGHT }
+
+/**
  * 悬浮窗布局常量。
  *
  * 内置形象是 184×100 的横向钞票；自定义形象给一个偏竖向的盒子，

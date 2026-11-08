@@ -164,6 +164,8 @@ object MascotPrefs {
     const val KEY_MOUTH_URI = "mascot_mouth_uri"
     const val KEY_ANIM_MODE = "mascot_anim_mode"
     const val KEY_CLICK_JELLY = "mascot_click_jelly"
+    const val KEY_SNAP_ENABLED = "mascot_snap_enabled"
+    const val KEY_SNAP_EDGE = "mascot_snap_edge"
 
     fun defaults() = mapOf(
         KEY_ENABLED to true,
@@ -172,8 +174,10 @@ object MascotPrefs {
         KEY_SPEECH to true,
         KEY_EYE_TRACK to true,
         KEY_EYE_TRACK_PROB to 1.0f,
-        KEY_STYLE to MascotStyle.BUILTIN.value,
+        KEY_STYLE to MascotStyle.CUSTOM.value,
         KEY_ANIM_MODE to MascotAnimMode.JELLY.value,
         KEY_CLICK_JELLY to true,
+        KEY_SNAP_ENABLED to true,
+        KEY_SNAP_EDGE to MascotSnapEdge.LEFT.value,
     )
 }

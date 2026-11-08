@@ -46,12 +46,14 @@ fun CustomImageMascot(
     clickJelly: Boolean,
     speechVisible: Boolean,
     clickTick: Int,
+    flipHorizontal: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
 
     val image by produceState<Drawable?>(initialValue = null, imageUri) {
-        value = MascotImageLoader.load(context, imageUri)
+        // 用户还没选图时，用 App 内置的默认形象（已抠成透明背景）
+        value = MascotImageLoader.load(context, imageUri) ?: MascotImageLoader.loadBundled(context)
     }
     val mouth by produceState<Drawable?>(initialValue = null, mouthUri) {
         value = MascotImageLoader.load(context, mouthUri)
@@ -92,7 +94,8 @@ fun CustomImageMascot(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    scaleX = squashX
+                    // 贴边方向变化时整张图水平镜像，保证"同一侧始终靠墙"
+                    scaleX = squashX * if (flipHorizontal) -1f else 1f
                     scaleY = squashY
                     transformOrigin = TransformOrigin(0.5f, 1f)
                 },
@@ -127,6 +130,13 @@ object MascotImageLoader {
     private val cache = object : LruCache<String, Drawable>(4) {}
 
     fun clearCache() = cache.evictAll()
+
+    /** App 内置的默认形象（像素小猫，背景已抠成透明） */
+    fun loadBundled(context: Context): Drawable? =
+        androidx.core.content.ContextCompat.getDrawable(
+            context,
+            com.friday.wimm.R.drawable.mascot_default
+        )
 
     suspend fun load(context: Context, uriString: String?): Drawable? = withContext(Dispatchers.IO) {
         if (uriString.isNullOrBlank()) return@withContext null

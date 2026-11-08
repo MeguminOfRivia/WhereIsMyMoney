@@ -209,9 +209,52 @@ object MascotImageLoader {
         val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return@withContext null
         if (queryFileSize(context, uri) > MAX_FILE_BYTES) return@withContext null
 
-        val drawable = runCatching { decode(context, uri) }.getOrNull()
+        val drawable = runCatching { decode(context, uri) }
+            .getOrNull()
+            ?.let { trimTransparent(context, it) }
         if (drawable != null) cache.put(uriString, drawable)
         drawable
+    }
+
+    /**
+     * 裁掉四周完全透明的边。
+     *
+     * 用户手抠的图经常留着一圈空白，那样即使盒子贴到屏幕边框，
+     * 看起来还是离边框有一段距离。裁掉之后「图片最外侧的像素」才真的顶到边框。
+     * 只处理静态图（BitmapDrawable）；GIF 是系统托管播放的，不动它。
+     */
+    private fun trimTransparent(context: Context, drawable: Drawable): Drawable {
+        val bitmap = (drawable as? BitmapDrawable)?.bitmap ?: return drawable
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width < 4 || height < 4) return drawable
+
+        var left = width
+        var top = height
+        var right = -1
+        var bottom = -1
+        val row = IntArray(width)
+        for (y in 0 until height) {
+            bitmap.getPixels(row, 0, width, 0, y, width, 1)
+            for (x in 0 until width) {
+                // alpha > 24 才算「看得见」，避免把几乎透明的柔光边也算进来
+                if ((row[x] ushr 24) > 24) {
+                    if (x < left) left = x
+                    if (x > right) right = x
+                    if (y < top) top = y
+                    if (y > bottom) bottom = y
+                }
+            }
+        }
+        if (right < left || bottom < top) return drawable
+        if (left == 0 && top == 0 && right == width - 1 && bottom == height - 1) return drawable
+
+        return runCatching {
+            val cropped = android.graphics.Bitmap.createBitmap(
+                bitmap, left, top, right - left + 1, bottom - top + 1
+            )
+            BitmapDrawable(context.resources, cropped)
+        }.getOrDefault(drawable)
     }
 
     private fun decode(context: Context, uri: Uri): Drawable? {

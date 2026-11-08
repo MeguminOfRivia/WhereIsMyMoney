@@ -2,8 +2,10 @@ package com.friday.wimm.data.database
 
 import android.content.ContentValues
 import com.friday.wimm.data.model.Account
+import com.friday.wimm.data.model.BudgetAdjustment
 import com.friday.wimm.data.model.Category
 import com.friday.wimm.data.model.MerchantRule
+import com.friday.wimm.data.model.MonthlyBudget
 
 /**
  * 账户 / 大类 / 收款方规则的读写。
@@ -266,6 +268,109 @@ class FinanceDao(private val helper: DatabaseHelper) {
             }
         }
         return null
+    }
+
+    // ── 预算 ────────────────────────────────────────────────
+
+    fun upsertBudget(budget: MonthlyBudget): Long {
+        val db = helper.writableDatabase
+        val values = ContentValues().apply {
+            put("categoryId", budget.categoryId)
+            put("period", budget.period)
+            put("amountCents", budget.amountCents)
+            put("dailyMode", budget.dailyMode)
+            put("dailyAmountCents", budget.dailyAmountCents)
+            put("createdAt", budget.createdAt)
+        }
+        return db.insertWithOnConflict(
+            "budgets", null, values, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
+        )
+    }
+
+    fun getBudgets(period: String): List<MonthlyBudget> {
+        val cursor = helper.readableDatabase.query(
+            "budgets", null, "period = ?", arrayOf(period), null, null, "categoryId ASC"
+        )
+        val list = mutableListOf<MonthlyBudget>()
+        while (cursor.moveToNext()) {
+            list.add(
+                MonthlyBudget(
+                    id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                    categoryId = cursor.getLong(cursor.getColumnIndexOrThrow("categoryId")),
+                    period = cursor.getString(cursor.getColumnIndexOrThrow("period")),
+                    amountCents = cursor.getLong(cursor.getColumnIndexOrThrow("amountCents")),
+                    dailyMode = cursor.getString(cursor.getColumnIndexOrThrow("dailyMode"))
+                        ?: MonthlyBudget.MODE_DYNAMIC,
+                    dailyAmountCents = cursor.getLong(cursor.getColumnIndexOrThrow("dailyAmountCents")),
+                    createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("createdAt"))
+                )
+            )
+        }
+        cursor.close()
+        return list
+    }
+
+    fun getBudget(categoryId: Long, period: String): MonthlyBudget? =
+        getBudgets(period).firstOrNull { it.categoryId == categoryId }
+
+    fun deleteBudget(categoryId: Long, period: String) {
+        helper.writableDatabase.delete(
+            "budgets", "categoryId = ? AND period = ?", arrayOf(categoryId.toString(), period)
+        )
+    }
+
+    fun addBudgetAdjustment(adjustment: BudgetAdjustment): Long {
+        val values = ContentValues().apply {
+            put("categoryId", adjustment.categoryId)
+            put("period", adjustment.period)
+            put("deltaCents", adjustment.deltaCents)
+            put("note", adjustment.note)
+            put("createdAt", adjustment.createdAt)
+        }
+        return helper.writableDatabase.insert("budget_adjustments", null, values)
+    }
+
+    fun getAdjustments(period: String): List<BudgetAdjustment> {
+        val cursor = helper.readableDatabase.query(
+            "budget_adjustments", null, "period = ?", arrayOf(period), null, null, "createdAt ASC"
+        )
+        val list = mutableListOf<BudgetAdjustment>()
+        while (cursor.moveToNext()) {
+            list.add(
+                BudgetAdjustment(
+                    id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                    categoryId = cursor.getLong(cursor.getColumnIndexOrThrow("categoryId")),
+                    period = cursor.getString(cursor.getColumnIndexOrThrow("period")),
+                    deltaCents = cursor.getLong(cursor.getColumnIndexOrThrow("deltaCents")),
+                    note = cursor.getString(cursor.getColumnIndexOrThrow("note")) ?: "",
+                    createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("createdAt"))
+                )
+            )
+        }
+        cursor.close()
+        return list
+    }
+
+    /**
+     * 统计一段时间内的支出（只算 expense，不含收入/转账），单位分。
+     * categoryId 为 null 时统计全部大类。
+     */
+    fun getSpentCents(fromTs: Long, toTs: Long, categoryId: Long? = null): Long {
+        val categoryClause = if (categoryId != null) " AND categoryId = ?" else ""
+        val args = buildList {
+            add(fromTs.toString())
+            add(toTs.toString())
+            if (categoryId != null) add(categoryId.toString())
+        }.toTypedArray()
+        val cursor = helper.readableDatabase.rawQuery(
+            "SELECT COALESCE(SUM(ROUND(amount * 100)), 0) FROM transactions " +
+                "WHERE type = 'expense' AND timestamp >= ? AND timestamp < ?$categoryClause",
+            args
+        )
+        var cents = 0L
+        if (cursor.moveToFirst()) cents = cursor.getLong(0)
+        cursor.close()
+        return cents
     }
 
     // ── 行映射 ──────────────────────────────────────────────

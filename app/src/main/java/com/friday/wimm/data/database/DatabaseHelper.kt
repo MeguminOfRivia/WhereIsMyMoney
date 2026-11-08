@@ -511,19 +511,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
         with(cursor) {
             while (moveToNext()) {
-                val transaction = Transaction(
-                    id = getLong(getColumnIndexOrThrow("id")),
-                    amount = getDouble(getColumnIndexOrThrow("amount")),
-                    merchant = getString(getColumnIndexOrThrow("merchant")),
-                    categoryId = if (isNull(getColumnIndexOrThrow("categoryId"))) null else getLong(getColumnIndexOrThrow("categoryId")),
-                    source = getString(getColumnIndexOrThrow("source")),
-                    timestamp = getLong(getColumnIndexOrThrow("timestamp")),
-                    note = getString(getColumnIndexOrThrow("note")),
-                    type = getString(getColumnIndexOrThrow("type")),
-                    transactionNo = try { getString(getColumnIndexOrThrow("transactionNo")) } catch (e: Exception) { null },
-                    dataSource = try { getString(getColumnIndexOrThrow("dataSource")) } catch (e: Exception) { "file" }
-                )
-                transactions.add(transaction)
+                // 统一走 cursorToTransaction，避免漏字段（之前这里漏了 fileId / accountId）
+                transactions.add(cursorToTransaction(this))
             }
         }
         cursor.close()

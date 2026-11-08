@@ -1,113 +1,112 @@
 package com.friday.wimm.ui.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.activity.compose.BackHandler
-import com.friday.wimm.ui.home.HomeScreen
-import com.friday.wimm.ui.cards.CardsScreen
-import com.friday.wimm.ui.cards.CreateCardScreen
-import com.friday.wimm.ui.cards.CardDetailScreen
-import com.friday.wimm.ui.cards.CategoryManageScreen
+import com.friday.wimm.ui.accounts.AccountsScreen
+import com.friday.wimm.ui.budget.BudgetScreen
+import com.friday.wimm.ui.category.CategoryRuleScreen
 import com.friday.wimm.ui.import_screen.ImportScreen
+import com.friday.wimm.ui.ledger.LedgerHomeScreen
 import com.friday.wimm.ui.mascot.MascotScreen
-import com.friday.wimm.ui.settings.SettingsScreen
 import com.friday.wimm.ui.permissions.PermissionsScreen
-import com.friday.wimm.MyApplication
-import com.friday.wimm.data.model.Card
-import com.friday.wimm.data.repository.CardRepository
+import com.friday.wimm.ui.settings.SettingsRoutes
+import com.friday.wimm.ui.settings.SettingsScreen
+import com.friday.wimm.ui.stats.StatsScreen
+import com.friday.wimm.ui.theme.WimmIcons
+import kotlinx.coroutines.launch
 
-sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
-    object Home : Screen("home", "首页", Icons.Default.Home)
-    object Accounts : Screen("accounts", "账户", Icons.Default.List)
-    object Import : Screen("import", "导入", Icons.Default.Add)
-    object Mascot : Screen("mascot", "Wally", Icons.Default.Star)
-    object Settings : Screen("settings", "设置", Icons.Default.Settings)
+sealed class Tab(val route: String, val title: String, val icon: ImageVector) {
+    data object Home : Tab("home", "首页", Icons.Default.Home)
+    data object Accounts : Tab("accounts", "账户", WimmIcons.AccountCard)
+    data object Stats : Tab("stats", "统计", WimmIcons.BarChart)
+    data object Budget : Tab("budget", "预算", WimmIcons.BudgetTarget)
+    data object Settings : Tab("settings", "设置", Icons.Default.Settings)
 }
 
+/**
+ * 应用入口。
+ *
+ * 第一次进来先过权限页，之后是五个底部标签：
+ * 首页（流水）/ 账户 / 统计 / 预算 / 设置。
+ * Wally 形象、账单导入、大类规则都放在设置里，作为全屏子页面。
+ */
 @Composable
 fun AppNavigation() {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("wimm_prefs", android.content.Context.MODE_PRIVATE) }
+    val prefs = remember {
+        context.getSharedPreferences("wimm_prefs", android.content.Context.MODE_PRIVATE)
+    }
     var permissionsDone by remember { mutableStateOf(prefs.getBoolean("permissions_done", false)) }
 
     if (!permissionsDone) {
         PermissionsScreen(onAllGranted = {
             prefs.edit().putBoolean("permissions_done", true).apply()
             permissionsDone = true
-            // 创建默认全局卡片
-            createDefaultGlobalCard(context)
         })
     } else {
-        // 确保全局卡片存在（数据库操作放到 IO 线程，避免启动时卡顿）
-        LaunchedEffect(Unit) {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                createDefaultGlobalCard(context)
-            }
-        }
         MainContent()
-    }
-}
-
-private fun createDefaultGlobalCard(context: android.content.Context) {
-    val application = context.applicationContext as MyApplication
-    val cardRepository = CardRepository(application.databaseHelper)
-    val cards = cardRepository.getAllCards()
-    if (cards.isEmpty()) {
-        val globalCard = Card(
-            name = "全局统计",
-            startTime = System.currentTimeMillis(),
-            endTime = 0,
-            isGlobal = true
-        )
-        cardRepository.insertCard(globalCard)
     }
 }
 
 @Composable
 private fun MainContent() {
-    val screens = listOf(Screen.Home, Screen.Accounts, Screen.Import, Screen.Mascot, Screen.Settings)
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { screens.size })
-    val coroutineScope = rememberCoroutineScope()
+    val tabs = remember {
+        listOf(Tab.Home, Tab.Accounts, Tab.Stats, Tab.Budget, Tab.Settings)
+    }
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { tabs.size })
+    val scope = rememberCoroutineScope()
 
-    // 子页面状态 - 当有子页面时隐藏底部导航栏
-    var showNavBar by remember { mutableStateOf(true) }
-    var currentSubPage by remember { mutableStateOf<String?>(null) }
-    var selectedCard by remember { mutableStateOf<Card?>(null) }
-    // 跟踪所有子页面（包括屏幕内部的子页面），统一控制滑动
-    var anySubPageActive by remember { mutableStateOf(false) }
+    // 子页面：null 表示当前停在标签页上
+    var subPage by remember { mutableStateOf<String?>(null) }
+    // 从子页面回来或者切页时 +1，让首页重新查一次数据
+    var refreshTick by remember { mutableIntStateOf(0) }
+
+    fun closeSubPage() {
+        subPage = null
+        refreshTick++
+    }
+
+    BackHandler(enabled = subPage != null) { closeSubPage() }
 
     Scaffold(
         bottomBar = {
-            if (showNavBar) {
+            if (subPage == null) {
                 NavigationBar {
-                    screens.forEachIndexed { index, screen ->
+                    tabs.forEachIndexed { index, tab ->
                         NavigationBarItem(
-                            icon = { Icon(screen.icon, contentDescription = screen.title) },
-                            label = { Text(screen.title) },
+                            icon = { Icon(tab.icon, contentDescription = tab.title) },
+                            label = { Text(tab.title) },
                             selected = pagerState.currentPage == index,
                             onClick = {
-                                val current = pagerState.currentPage
-                                val distance = kotlin.math.abs(index - current)
-                                coroutineScope.launch {
+                                val distance = kotlin.math.abs(index - pagerState.currentPage)
+                                scope.launch {
                                     if (distance <= 1) {
                                         pagerState.animateScrollToPage(index)
                                     } else {
                                         pagerState.scrollToPage(index)
                                     }
                                 }
+                                if (index == 0) refreshTick++
                             }
                         )
                     }
@@ -115,55 +114,21 @@ private fun MainContent() {
             }
         }
     ) { innerPadding ->
-        when (currentSubPage) {
-            "create_card" -> {
-                CreateCardScreen(
-                    onBack = {
-                        currentSubPage = null
-                        showNavBar = true
-                        anySubPageActive = false
-                    },
-                    onCreated = {
-                        currentSubPage = null
-                        showNavBar = true
-                        anySubPageActive = false
-                    }
-                )
-            }
-            "card_detail" -> {
-                selectedCard?.let { card ->
-                    CardDetailScreen(
-                        card = card,
-                        onBack = {
-                            currentSubPage = null
-                            showNavBar = true
-                            anySubPageActive = false
-                        },
-                        onManageCategories = {}
-                    )
-                }
-            }
+        when (subPage) {
+            SettingsRoutes.CATEGORIES -> CategoryRuleScreen(onBack = { closeSubPage() })
+            SettingsRoutes.IMPORT -> ImportScreen(onSubPageChanged = {})
+            SettingsRoutes.MASCOT -> MascotScreen(onSubPageChanged = {})
             else -> {
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.padding(innerPadding),
-                    userScrollEnabled = !anySubPageActive && currentSubPage == null
+                    modifier = Modifier.padding(innerPadding)
                 ) { page ->
                     when (page) {
-                        0 -> HomeScreen()
-                        1 -> com.friday.wimm.ui.accounts.AccountsScreen()
-                        2 -> ImportScreen(onSubPageChanged = { isSub ->
-                            showNavBar = !isSub
-                            anySubPageActive = isSub
-                        })
-                        3 -> MascotScreen(onSubPageChanged = { isSub ->
-                            showNavBar = !isSub
-                            anySubPageActive = isSub
-                        })
-                        4 -> SettingsScreen(onSubPageChanged = { isSub ->
-                            showNavBar = !isSub
-                            anySubPageActive = isSub
-                        })
+                        0 -> LedgerHomeScreen(refreshKey = refreshTick)
+                        1 -> AccountsScreen()
+                        2 -> StatsScreen()
+                        3 -> BudgetScreen()
+                        4 -> SettingsScreen(onNavigate = { subPage = it })
                     }
                 }
             }

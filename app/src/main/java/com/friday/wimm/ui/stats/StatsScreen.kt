@@ -1,44 +1,45 @@
 package com.friday.wimm.ui.stats
 
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.ExperimentalFoundationApi
+import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,826 +47,635 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.friday.wimm.MyApplication
-import com.friday.wimm.data.database.MerchantTotal
-import kotlinx.coroutines.delay
+import com.friday.wimm.data.database.LedgerDao
+import com.friday.wimm.data.database.LedgerDao.LedgerFilter
+import com.friday.wimm.data.model.Account
+import com.friday.wimm.data.model.Category
+import com.friday.wimm.data.model.CategoryTotal
+import com.friday.wimm.data.model.LedgerSums
+import com.friday.wimm.data.model.MerchantTotalRow
+import com.friday.wimm.data.model.TrendPoint
+import com.friday.wimm.util.BudgetMath
+import com.friday.wimm.util.Money
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+private enum class StatsRange(val label: String) {
+    THIS_MONTH("本月"),
+    LAST_MONTH("上月"),
+    LAST_3_MONTHS("近 3 个月"),
+    THIS_YEAR("今年"),
+    ALL("全部")
+}
+
+/**
+ * 统计页。
+ *
+ * 所有数字都从 LedgerDao 来，和首页、预算页同一套筛选口径，
+ * 所以「首页看 1200，统计页看 980」这种事不会再发生。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StatsScreen() {
-    val application = androidx.compose.ui.platform.LocalContext.current.applicationContext as MyApplication
-    val viewModel: StatsViewModel = viewModel(
-        factory = StatsViewModel.Factory(
-            application.transactionRepository,
-            application.categoryRepository
+    val context = LocalContext.current
+    val app = context.applicationContext as MyApplication
+    val ledgerDao = app.ledgerDao
+    val financeDao = app.financeDao
+    val scope = rememberCoroutineScope()
+
+    var range by remember { mutableStateOf(StatsRange.THIS_MONTH) }
+    var accountId by remember { mutableStateOf<Long?>(null) }
+    var categoryId by remember { mutableStateOf<Long?>(null) }
+    var keyword by remember { mutableStateOf("") }
+
+    var accounts by remember { mutableStateOf<List<Account>>(emptyList()) }
+    var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
+    var sums by remember { mutableStateOf(LedgerSums(0, 0, 0, 0)) }
+    var prevSums by remember { mutableStateOf<LedgerSums?>(null) }
+    var catTotals by remember { mutableStateOf<List<CategoryTotal>>(emptyList()) }
+    var incomeTotals by remember { mutableStateOf<List<CategoryTotal>>(emptyList()) }
+    var merchants by remember { mutableStateOf<List<MerchantTotalRow>>(emptyList()) }
+    var trend by remember { mutableStateOf<List<TrendPoint>>(emptyList()) }
+    var trendByMonth by remember { mutableStateOf(false) }
+    var dayCount by remember { mutableStateOf(1L) }
+
+    fun rangeBounds(): Pair<Long, Long> {
+        val today = LocalDate.now()
+        val thisMonth = YearMonth.from(today)
+        return when (range) {
+            StatsRange.THIS_MONTH -> LedgerDao.monthRange(thisMonth.toString())
+            StatsRange.LAST_MONTH -> LedgerDao.monthRange(thisMonth.minusMonths(1).toString())
+            StatsRange.LAST_3_MONTHS -> LedgerDao.monthRange(thisMonth.minusMonths(2).toString()).first to
+                LedgerDao.monthRange(thisMonth.toString()).second
+            StatsRange.THIS_YEAR -> {
+                val start = BudgetMath.dayStartMillis(LocalDate.of(today.year, 1, 1))
+                val end = BudgetMath.dayStartMillis(LocalDate.of(today.year + 1, 1, 1))
+                start to end
+            }
+            StatsRange.ALL -> 0L to Long.MAX_VALUE
+        }
+    }
+
+    fun previousBounds(): Pair<Long, Long>? {
+        val today = LocalDate.now()
+        val thisMonth = YearMonth.from(today)
+        return when (range) {
+            StatsRange.THIS_MONTH -> LedgerDao.monthRange(thisMonth.minusMonths(1).toString())
+            StatsRange.LAST_MONTH -> LedgerDao.monthRange(thisMonth.minusMonths(2).toString())
+            StatsRange.LAST_3_MONTHS -> LedgerDao.monthRange(thisMonth.minusMonths(5).toString()).first to
+                LedgerDao.monthRange(thisMonth.minusMonths(3).toString()).second
+            StatsRange.THIS_YEAR -> {
+                val start = BudgetMath.dayStartMillis(LocalDate.of(today.year - 1, 1, 1))
+                val end = BudgetMath.dayStartMillis(LocalDate.of(today.year, 1, 1))
+                start to end
+            }
+            StatsRange.ALL -> null
+        }
+    }
+
+    suspend fun reload() {
+        val (from, to) = rangeBounds()
+        val filter = LedgerFilter(
+            fromTs = from,
+            toTs = to,
+            accountId = accountId,
+            categoryId = categoryId,
+            merchantKeyword = keyword
         )
-    )
-
-    // 每次页面可见时刷新数据
-    LaunchedEffect(Unit) {
-        viewModel.loadData()
-    }
-
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.loadData()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-
-    val merchantTotals by viewModel.merchantTotals.collectAsState()
-    val totalExpense by viewModel.totalExpense.collectAsState()
-    val totalIncome by viewModel.totalIncome.collectAsState()
-    val sortMode by viewModel.sortMode.collectAsState()
-    val sortAscending by viewModel.sortAscending.collectAsState()
-    val isRefreshing by viewModel.isRefreshing.collectAsState()
-    val toastMessage by viewModel.toastMessage.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val expenseCount by viewModel.expenseCount.collectAsState()
-    val incomeCount by viewModel.incomeCount.collectAsState()
-    val filteredTransactions by viewModel.filteredTransactions.collectAsState()
-    val timeRangeText by viewModel.timeRangeText.collectAsState()
-    val averages by viewModel.averages.collectAsState()
-
-    // 排行 Tab
-    val pagerState = rememberPagerState(pageCount = { 3 })
-    val coroutineScope = rememberCoroutineScope()
-    val tabs = listOf("总排行", "支出排行", "收入排行")
-
-    // 日期选择器状态
-    var showDatePicker by remember { mutableStateOf(false) }
-
-    // 动画状态
-    var cardVisible by remember { mutableStateOf(false) }
-    var statsVisible by remember { mutableStateOf(false) }
-    var tabsVisible by remember { mutableStateOf(false) }
-    var listVisible by remember { mutableStateOf(false) }
-
-    val cardAlpha by animateFloatAsState(
-        targetValue = if (cardVisible) 1f else 0f,
-        animationSpec = tween(400, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "cardAlpha"
-    )
-    val cardOffsetY by animateFloatAsState(
-        targetValue = if (cardVisible) 0f else 60f,
-        animationSpec = tween(500, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "cardOffsetY"
-    )
-    val statsAlpha by animateFloatAsState(
-        targetValue = if (statsVisible) 1f else 0f,
-        animationSpec = tween(400, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "statsAlpha"
-    )
-    val statsOffsetY by animateFloatAsState(
-        targetValue = if (statsVisible) 0f else 40f,
-        animationSpec = tween(500, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "statsOffsetY"
-    )
-    val tabsAlpha by animateFloatAsState(
-        targetValue = if (tabsVisible) 1f else 0f,
-        animationSpec = tween(400, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "tabsAlpha"
-    )
-
-    LaunchedEffect(Unit) {
-        cardVisible = true
-        delay(200)
-        statsVisible = true
-        delay(200)
-        tabsVisible = true
-        delay(100)
-        listVisible = true
-    }
-
-    val expenseTotals = remember(merchantTotals) { merchantTotals.filter { it.type == "expense" } }
-    val incomeTotals = remember(merchantTotals) { merchantTotals.filter { it.type == "income" } }
-
-    // 使用LazyColumn实现CollapsingToolbar效果
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp)
-    ) {
-        // 总金额卡片
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp, bottom = 12.dp)
-                    .alpha(cardAlpha)
-                    .offset(y = cardOffsetY.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("总支出", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("¥${String.format("%.2f", totalExpense)}", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
-                            Text("${expenseCount} 笔", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("总收入", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("¥${String.format("%.2f", totalIncome)}", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
-                            Text("${incomeCount} 笔", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    androidx.compose.material3.Divider(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.outlineVariant
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("净结余", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        val net = totalIncome - totalExpense
-                        Text(
-                            "${if (net >= 0) "+" else ""}¥${String.format("%.2f", net)}",
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (net >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                        )
-                        Text("共 ${expenseCount + incomeCount} 笔交易", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
-
-        // 待补录提醒
-        item {
-            val pendingTransactions = remember(filteredTransactions) { filteredTransactions.filter { t -> t.amount <= 0 } }
-            if (pendingTransactions.isNotEmpty()) {
-                var showEditDialog by remember { mutableStateOf(false) }
-                var editingTransaction by remember { mutableStateOf<com.friday.wimm.data.model.Transaction?>(null) }
-                var editAmountText by remember { mutableStateOf("") }
-
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            "\u26A0\uFE0F 有 ${pendingTransactions.size} 笔交易待补录金额",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        for (tx in pendingTransactions.take(5)) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .background(
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                                        MaterialTheme.shapes.small
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        tx.merchant,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Text(
-                                        if (tx.type == "income") "收入" else "支出",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                androidx.compose.material3.TextButton(
-                                    onClick = {
-                                        editingTransaction = tx
-                                        editAmountText = ""
-                                        showEditDialog = true
-                                    }
-                                ) {
-                                    Text("补录金额", color = MaterialTheme.colorScheme.primary)
-                                }
-                            }
-                        }
-                        if (pendingTransactions.size > 5) {
-                            Text(
-                                "...还有 ${pendingTransactions.size - 5} 笔",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                        }
-                    }
-                }
-
-                if (showEditDialog && editingTransaction != null) {
-                    AlertDialog(
-                        onDismissRequest = { showEditDialog = false },
-                        title = { Text("补录金额") },
-                        text = {
-                            Column {
-                                Text("${editingTransaction!!.merchant} - ${if (editingTransaction!!.type == "income") "收入" else "支出"}")
-                                Spacer(modifier = Modifier.height(8.dp))
-                                androidx.compose.material3.OutlinedTextField(
-                                    value = editAmountText,
-                                    onValueChange = { editAmountText = it },
-                                    label = { Text("金额") },
-                                    prefix = { Text("¥") },
-                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
-                                    ),
-                                    singleLine = true
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            androidx.compose.material3.TextButton(
-                                onClick = {
-                                    val amount = editAmountText.toDoubleOrNull()
-                                    if (amount != null && amount > 0) {
-                                        viewModel.updateTransactionAmount(editingTransaction!!.id, amount)
-                                        showEditDialog = false
-                                    }
-                                }
-                            ) { Text("确认") }
-                        },
-                        dismissButton = {
-                            androidx.compose.material3.TextButton(
-                                onClick = { showEditDialog = false }
-                            ) { Text("取消") }
-                        }
-                    )
-                }
-            }
-        }
-
-        // 时间范围选择按钮 + 刷新按钮
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-                    .alpha(statsAlpha),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = { showDatePicker = true },
-                    modifier = Modifier.weight(1f),
-                    content = {
-                        Icon(
-                            imageVector = Icons.Default.DateRange,
-                            contentDescription = "时间",
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                        Text(
-                            text = timeRangeText,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                )
-                // 刷新按钮
-                IconButton(
-                    onClick = { viewModel.refreshData() },
-                    modifier = Modifier
-                        .align(Alignment.CenterVertically)
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant,
-                            MaterialTheme.shapes.small
-                        )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "刷新",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
-        // 均值统计卡片
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-                    .alpha(statsAlpha)
-                    .offset(y = statsOffsetY.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "支出均值分析",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = averages.timeRange,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 10.sp
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("日均", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("¥${String.format("%.2f", averages.daily)}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("月均", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("¥${String.format("%.2f", averages.monthly)}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("年均", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("¥${String.format("%.2f", averages.yearly)}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        }
-
-        // 排行 Tab
-        stickyHeader {
-            TabRow(
-                selectedTabIndex = pagerState.currentPage,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp)
-                    .alpha(tabsAlpha)
-                    .background(MaterialTheme.colorScheme.surface)
-            ) {
-                tabs.forEachIndexed { index, title ->
-                    Tab(
-                        selected = pagerState.currentPage == index,
-                        onClick = {
-                            coroutineScope.launch {
-                                pagerState.animateScrollToPage(index)
-                            }
-                        },
-                        text = { Text(title) }
-                    )
-                }
-            }
-        }
-
-        // 排序选项 - 带动画
-        item {
-            val sortAlpha by animateFloatAsState(
-                targetValue = if (tabsVisible) 1f else 0f,
-                animationSpec = tween(400, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-                label = "sortAlpha"
+        val prev = previousBounds()
+        val now = System.currentTimeMillis()
+        val effectiveEnd = if (to == Long.MAX_VALUE) now else to.coerceAtMost(now)
+        val days = ((effectiveEnd - from) / 86_400_000L).coerceAtLeast(1)
+        val data = withContext(Dispatchers.IO) {
+            val byMonth = range == StatsRange.ALL || range == StatsRange.THIS_YEAR ||
+                (effectiveEnd - from) > 92L * 86_400_000L
+            StatsData(
+                accounts = financeDao.getAllAccounts(),
+                categories = financeDao.getCategories(),
+                sums = ledgerDao.sums(filter),
+                prevSums = prev?.let { (pf, pt) -> ledgerDao.sums(filter.copy(fromTs = pf, toTs = pt)) },
+                catTotals = ledgerDao.categoryBreakdown(filter),
+                incomeTotals = ledgerDao.incomeBreakdown(filter),
+                merchants = ledgerDao.merchantBreakdown(filter, 12),
+                trend = if (byMonth) ledgerDao.monthlyTrend(filter) else ledgerDao.dailyTrend(filter),
+                byMonth = byMonth,
+                days = days
             )
-            val sortOffsetY by animateFloatAsState(
-                targetValue = if (tabsVisible) 0f else 20f,
-                animationSpec = tween(400, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-                label = "sortOffsetY"
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp)
-                    .alpha(sortAlpha)
-                    .offset(y = sortOffsetY.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "排序：",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-                FilterChip(
-                    selected = sortMode == 0,
-                    onClick = { viewModel.setSortMode(0) },
-                    label = { Text("金额", style = MaterialTheme.typography.bodySmall) },
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-                FilterChip(
-                    selected = sortMode == 1,
-                    onClick = { viewModel.setSortMode(1) },
-                    label = { Text("时间", style = MaterialTheme.typography.bodySmall) },
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-                // 正序/倒序按钮
-                IconButton(
-                    onClick = { viewModel.toggleSortDirection() },
-                    modifier = Modifier
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant,
-                            MaterialTheme.shapes.small
-                        )
-                        .size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = if (sortAscending) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = if (sortAscending) "正序" else "倒序",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+        }
+        accounts = data.accounts
+        categories = data.categories
+        sums = data.sums
+        prevSums = data.prevSums
+        catTotals = data.catTotals
+        incomeTotals = data.incomeTotals
+        merchants = data.merchants
+        trend = data.trend
+        trendByMonth = data.byMonth
+        dayCount = data.days
+    }
+
+    LaunchedEffect(range, accountId, categoryId, keyword) { reload() }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                val (from, to) = rangeBounds()
+                val rows = withContext(Dispatchers.IO) {
+                    ledgerDao.query(
+                        LedgerFilter(
+                            fromTs = from,
+                            toTs = to,
+                            accountId = accountId,
+                            categoryId = categoryId,
+                            merchantKeyword = keyword
+                        ),
+                        limit = 20_000
                     )
                 }
+                withContext(Dispatchers.IO) { writeCsv(context, uri, rows) }
             }
         }
+    }
 
-        // 滑动切换的列表（每个页面）
-        item {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxWidth()
-            ) { page ->
-                val list = when (page) {
-                    0 -> merchantTotals
-                    1 -> expenseTotals
-                    2 -> incomeTotals
-                    else -> merchantTotals
-                }
-                Column {
-                    if (list.isEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(32.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                "暂无数据",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    } else {
-                        list.take(30).forEachIndexed { index, merchantTotal ->
-                            AnimatedStatsItem(
-                                merchantTotal = merchantTotal,
-                                index = index,
-                                visible = listVisible
-                            )
-                        }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("统计") },
+                actions = {
+                    IconButton(onClick = {
+                        exportLauncher.launch("wimm-${System.currentTimeMillis()}.csv")
+                    }) {
+                        Icon(Icons.Default.Share, contentDescription = "导出 CSV")
                     }
                 }
-            }
-        }
-    }
-
-    // Toast消息监听
-    LaunchedEffect(toastMessage) {
-        toastMessage?.let {
-            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
-            viewModel.clearToast()
-        }
-    }
-
-    // 日期范围选择器（简化UI）
-    if (showDatePicker) {
-        DateRangePickerDialog(
-            onDismiss = { showDatePicker = false },
-            onConfirm = { startTime, endTime ->
-                viewModel.setTimeRange(startTime, endTime)
-                showDatePicker = false
-            }
-        )
-    }
-}
-
-@Composable
-fun DateRangePickerDialog(
-    onDismiss: () -> Unit,
-    onConfirm: (Long, Long) -> Unit
-) {
-    // 快速选择选项
-    val quickOptions = listOf(
-        "本月", "上月", "近3个月", "近半年", "近一年"
-    )
-    var selectedOption by remember { mutableStateOf(-1) }
-
-    // 自定义日期输入
-    var showCustomInput by remember { mutableStateOf(false) }
-    var startYear by remember { mutableStateOf("2025") }
-    var startMonth by remember { mutableStateOf("1") }
-    var startDay by remember { mutableStateOf("1") }
-    var endYear by remember { mutableStateOf("2026") }
-    var endMonth by remember { mutableStateOf("6") }
-    var endDay by remember { mutableStateOf("20") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            if (showCustomInput) {
-                TextButton(
-                    onClick = {
-                        try {
-                            val cal = java.util.Calendar.getInstance()
-                            cal.set(startYear.toInt(), startMonth.toInt() - 1, startDay.toInt(), 0, 0, 0)
-                            val start = cal.timeInMillis
-                            cal.set(endYear.toInt(), endMonth.toInt() - 1, endDay.toInt(), 23, 59, 59)
-                            val end = cal.timeInMillis
-                            if (end > start) {
-                                onConfirm(start, end)
-                            }
-                        } catch (e: Exception) {
-                            // 忽略无效输入
-                        }
-                    }
-                ) {
-                    Text("确认")
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消")
-            }
-        },
-        title = {
-            Text(
-                text = "选择时间范围",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
             )
-        },
-        text = {
-            Column {
-                // 快速选择
-                Text(
-                    text = "快速选择",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(bottom = 8.dp)
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                FilterBar(
+                    range = range,
+                    onRange = { range = it },
+                    accounts = accounts,
+                    accountId = accountId,
+                    onAccount = { accountId = it },
+                    categories = categories,
+                    categoryId = categoryId,
+                    onCategory = { categoryId = it },
+                    keyword = keyword,
+                    onKeyword = { keyword = it }
                 )
+            }
 
-                quickOptions.forEachIndexed { index, option ->
+            item {
+                SummaryCard(
+                    sums = sums,
+                    prev = prevSums,
+                    days = dayCount,
+                    rangeLabel = range.label
+                )
+            }
+
+            if (catTotals.isNotEmpty()) {
+                item {
                     Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text("支出构成", fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(10.dp))
+                            PieChart(catTotals)
+                            Spacer(modifier = Modifier.height(10.dp))
+                            CategoryLegend(catTotals, sums.expenseCents)
+                        }
+                    }
+                }
+            }
+
+            if (trend.isNotEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                if (trendByMonth) "每月支出" else "每天支出",
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            TrendChart(trend)
+                        }
+                    }
+                }
+            }
+
+            if (merchants.isNotEmpty()) {
+                item {
+                    Text(
+                        "花得最多的收款方",
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+                items(merchants, key = { it.merchant }) { row ->
+                    MerchantRow(row, merchants.first().cents)
+                }
+            }
+
+            if (incomeTotals.isNotEmpty()) {
+                item {
+                    Text("收入构成", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                }
+                items(incomeTotals, key = { "inc-${it.categoryId}" }) { row ->
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        onClick = {
-                            selectedOption = index
-                            val cal = java.util.Calendar.getInstance()
-                            val now = java.util.Calendar.getInstance()
-
-                            when (option) {
-                                "本月" -> {
-                                    cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
-                                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                                    cal.set(java.util.Calendar.MINUTE, 0)
-                                    cal.set(java.util.Calendar.SECOND, 0)
-                                }
-                                "上月" -> {
-                                    cal.add(java.util.Calendar.MONTH, -1)
-                                    cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
-                                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                                    cal.set(java.util.Calendar.MINUTE, 0)
-                                    cal.set(java.util.Calendar.SECOND, 0)
-                                }
-                                "近3个月" -> {
-                                    cal.add(java.util.Calendar.MONTH, -3)
-                                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                                    cal.set(java.util.Calendar.MINUTE, 0)
-                                    cal.set(java.util.Calendar.SECOND, 0)
-                                }
-                                "近半年" -> {
-                                    cal.add(java.util.Calendar.MONTH, -6)
-                                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                                    cal.set(java.util.Calendar.MINUTE, 0)
-                                    cal.set(java.util.Calendar.SECOND, 0)
-                                }
-                                "近一年" -> {
-                                    cal.add(java.util.Calendar.YEAR, -1)
-                                    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                                    cal.set(java.util.Calendar.MINUTE, 0)
-                                    cal.set(java.util.Calendar.SECOND, 0)
-                                }
-                            }
-                            onConfirm(cal.timeInMillis, now.timeInMillis)
-                        },
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (selectedOption == index)
-                                MaterialTheme.colorScheme.primaryContainer
-                            else
-                                MaterialTheme.colorScheme.surfaceVariant
-                        )
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
+                        Text(row.name)
                         Text(
-                            text = option,
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 自定义日期切换
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = { showCustomInput = !showCustomInput },
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Text(
-                        text = if (showCustomInput) "收起自定义日期" else "自定义日期范围",
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                // 自定义日期输入
-                if (showCustomInput) {
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(
-                        text = "开始日期",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = startYear,
-                            onValueChange = { startYear = it },
-                            label = { Text("年") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                        OutlinedTextField(
-                            value = startMonth,
-                            onValueChange = { startMonth = it },
-                            label = { Text("月") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                        OutlinedTextField(
-                            value = startDay,
-                            onValueChange = { startDay = it },
-                            label = { Text("日") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "结束日期",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = endYear,
-                            onValueChange = { endYear = it },
-                            label = { Text("年") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                        OutlinedTextField(
-                            value = endMonth,
-                            onValueChange = { endMonth = it },
-                            label = { Text("月") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                        OutlinedTextField(
-                            value = endDay,
-                            onValueChange = { endDay = it },
-                            label = { Text("日") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
+                            "¥${Money.formatCents(row.cents)}",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
             }
         }
-    )
+    }
 }
 
+private data class StatsData(
+    val accounts: List<Account>,
+    val categories: List<Category>,
+    val sums: LedgerSums,
+    val prevSums: LedgerSums?,
+    val catTotals: List<CategoryTotal>,
+    val incomeTotals: List<CategoryTotal>,
+    val merchants: List<MerchantTotalRow>,
+    val trend: List<TrendPoint>,
+    val byMonth: Boolean,
+    val days: Long
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AnimatedStatsItem(
-    merchantTotal: MerchantTotal,
-    index: Int,
-    visible: Boolean
+private fun FilterBar(
+    range: StatsRange,
+    onRange: (StatsRange) -> Unit,
+    accounts: List<Account>,
+    accountId: Long?,
+    onAccount: (Long?) -> Unit,
+    categories: List<Category>,
+    categoryId: Long?,
+    onCategory: (Long?) -> Unit,
+    keyword: String,
+    onKeyword: (String) -> Unit
 ) {
-    val shouldAnimate = index < 8
-    var itemVisible by remember { mutableStateOf(!shouldAnimate) }
+    var accountMenu by remember { mutableStateOf(false) }
+    var categoryMenu by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
 
-    LaunchedEffect(visible) {
-        if (visible && shouldAnimate) {
-            delay(index * 50L)
-            itemVisible = true
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            StatsRange.values().forEach { item ->
+                FilterChip(
+                    selected = range == item,
+                    onClick = { onRange(item) },
+                    label = { Text(item.label) }
+                )
+            }
         }
-    }
-
-    val itemAlpha by animateFloatAsState(
-        targetValue = if (itemVisible || !shouldAnimate) 1f else 0f,
-        animationSpec = tween(300, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "itemAlpha"
-    )
-    val itemOffsetY by animateFloatAsState(
-        targetValue = if (itemVisible || !shouldAnimate) 0f else 40f,
-        animationSpec = tween(400, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "itemOffsetY"
-    )
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .alpha(itemAlpha)
-            .offset(y = itemOffsetY.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        MerchantTotalItem(merchantTotal)
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box {
+                FilterChip(
+                    selected = accountId != null,
+                    onClick = { accountMenu = true },
+                    label = { Text(accounts.firstOrNull { it.id == accountId }?.name ?: "全部账户") },
+                    trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) }
+                )
+                DropdownMenu(expanded = accountMenu, onDismissRequest = { accountMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("全部账户") },
+                        onClick = { onAccount(null); accountMenu = false }
+                    )
+                    accounts.forEach {
+                        DropdownMenuItem(
+                            text = { Text(it.name) },
+                            onClick = { onAccount(it.id); accountMenu = false }
+                        )
+                    }
+                }
+            }
+            Box {
+                FilterChip(
+                    selected = categoryId != null,
+                    onClick = { categoryMenu = true },
+                    label = { Text(categories.firstOrNull { it.id == categoryId }?.name ?: "全部大类") },
+                    trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) }
+                )
+                DropdownMenu(expanded = categoryMenu, onDismissRequest = { categoryMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("全部大类") },
+                        onClick = { onCategory(null); categoryMenu = false }
+                    )
+                    categories.forEach {
+                        DropdownMenuItem(
+                            text = { Text(it.name) },
+                            onClick = { onCategory(it.id); categoryMenu = false }
+                        )
+                    }
+                }
+            }
+            FilterChip(
+                selected = showSearch || keyword.isNotBlank(),
+                onClick = { showSearch = !showSearch },
+                label = { Text(if (keyword.isBlank()) "搜收款方" else keyword) }
+            )
+        }
+        if (showSearch) {
+            OutlinedTextField(
+                value = keyword,
+                onValueChange = onKeyword,
+                label = { Text("收款方关键词") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
     }
 }
 
 @Composable
-fun MerchantTotalItem(merchantTotal: MerchantTotal) {
-    val isIncome = merchantTotal.type == "income"
-    Row(
+private fun SummaryCard(sums: LedgerSums, prev: LedgerSums?, days: Long, rangeLabel: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("$rangeLabel 支出", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "¥${Money.formatCents(sums.expenseCents)}",
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text("收入", style = MaterialTheme.typography.labelSmall)
+                    Text("¥${Money.formatCents(sums.incomeCents)}", fontWeight = FontWeight.Medium)
+                }
+                Column {
+                    Text("日均支出", style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        "¥${Money.formatCents(sums.expenseCents / days.coerceAtLeast(1))}",
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("笔数", style = MaterialTheme.typography.labelSmall)
+                    Text("${sums.count}", fontWeight = FontWeight.Medium)
+                }
+            }
+            if (prev != null && prev.expenseCents > 0) {
+                Spacer(modifier = Modifier.height(6.dp))
+                val diff = sums.expenseCents - prev.expenseCents
+                val pct = diff * 100.0 / prev.expenseCents
+                Text(
+                    "比上一周期" + (if (diff >= 0) "多花" else "少花") +
+                        " ¥${Money.formatCents(kotlin.math.abs(diff))}" +
+                        "（${String.format(Locale.US, "%+.1f", pct)}%）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (diff > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PieChart(totals: List<CategoryTotal>) {
+    val total = totals.sumOf { it.cents }.coerceAtLeast(1)
+    Canvas(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .height(180.dp)
     ) {
-        Column(modifier = Modifier.weight(1f, fill = true)) {
-            Text(
-                text = merchantTotal.merchant,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+        val diameter = kotlin.math.min(size.width, size.height) * 0.9f
+        val topLeft = Offset(
+            (size.width - diameter) / 2f,
+            (size.height - diameter) / 2f
+        )
+        val arcSize = Size(diameter, diameter)
+        var startAngle = -90f
+        totals.forEach { item ->
+            val sweep = item.cents * 360f / total
+            drawArc(
+                color = parseColor(item.color),
+                startAngle = startAngle,
+                sweepAngle = (sweep - 1.2f).coerceAtLeast(0.6f),
+                useCenter = true,
+                topLeft = topLeft,
+                size = arcSize
             )
-            Text(
-                text = if (isIncome) "收入" else "支出",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isIncome) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
-            )
+            startAngle += sweep
         }
-        Spacer(modifier = Modifier.padding(4.dp))
-        Text(
-            text = "${if (isIncome) "+" else "-"}¥${String.format("%.2f", merchantTotal.total)}",
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.Bold,
-            color = if (isIncome) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
+        drawArc(
+            color = Color.White.copy(alpha = 0.15f),
+            startAngle = 0f,
+            sweepAngle = 360f,
+            useCenter = false,
+            topLeft = topLeft,
+            size = arcSize,
+            style = Stroke(width = 2f)
         )
     }
+}
+
+@Composable
+private fun CategoryLegend(totals: List<CategoryTotal>, totalCents: Long) {
+    Column {
+        totals.forEach { item ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(parseColor(item.color))
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                Text(item.name, modifier = Modifier.weight(1f), fontSize = 13.sp)
+                Text(
+                    "¥${Money.formatCents(item.cents)}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                Text(
+                    if (totalCents > 0) {
+                        String.format(Locale.US, "%.1f", item.cents * 100.0 / totalCents) + "%"
+                    } else "0%",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrendChart(points: List<TrendPoint>) {
+    val max = points.maxOfOrNull { it.expenseCents }?.coerceAtLeast(1) ?: 1
+    Column {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(120.dp)
+        ) {
+            val barSlot = size.width / points.size.coerceAtLeast(1)
+            val barWidth = (barSlot * 0.62f).coerceAtLeast(2f)
+            points.forEachIndexed { index, point ->
+                val ratio = point.expenseCents.toFloat() / max
+                val barHeight = (size.height - 4f) * ratio
+                drawRect(
+                    color = Color(0xFFEF5350),
+                    topLeft = Offset(index * barSlot + (barSlot - barWidth) / 2f, size.height - barHeight),
+                    size = Size(barWidth, barHeight)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                points.firstOrNull()?.label ?: "",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "最高 ¥${Money.formatCents(max)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                points.lastOrNull()?.label ?: "",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun MerchantRow(row: MerchantTotalRow, maxCents: Long) {
+    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(row.merchant, fontSize = 14.sp, maxLines = 1, modifier = Modifier.weight(1f))
+            Text(
+                "¥${Money.formatCents(row.cents)}",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        Spacer(modifier = Modifier.height(3.dp))
+        LinearProgressIndicator(
+            progress = { (row.cents.toFloat() / maxCents.coerceAtLeast(1)).coerceIn(0f, 1f) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(5.dp)
+                .clip(CircleShape),
+            color = MaterialTheme.colorScheme.error,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    }
+}
+
+private fun parseColor(hex: String): Color = try {
+    Color(android.graphics.Color.parseColor(hex))
+} catch (e: Exception) {
+    Color(0xFF9E9E9E)
+}
+
+/** 导出 CSV：只用内容 URI 写入，不申请任何存储权限 */
+private fun writeCsv(context: Context, uri: Uri, rows: List<com.friday.wimm.data.model.LedgerEntry>) {
+    val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.CHINA)
+    context.contentResolver.openOutputStream(uri)?.use { output ->
+        output.bufferedWriter().use { writer ->
+            writer.write("日期,类型,金额,收款方,大类,账户,备注,来源\n")
+            rows.forEach { entry ->
+                val time = java.time.Instant.ofEpochMilli(entry.tx.timestamp)
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .format(formatter)
+                writer.write(
+                    listOf(
+                        time,
+                        if (entry.isIncome) "收入" else "支出",
+                        Money.formatCents(entry.amountCents),
+                        entry.tx.merchant,
+                        entry.categoryName,
+                        entry.accountName,
+                        entry.tx.note,
+                        entry.tx.dataSource
+                    ).joinToString(",") { csvCell(it) }
+                )
+                writer.write("\n")
+            }
+        }
+    }
+}
+
+private fun csvCell(value: String): String {
+    if (value.contains(',') || value.contains('"') || value.contains('\n')) {
+        return "\"" + value.replace("\"", "\"\"") + "\""
+    }
+    return value
 }

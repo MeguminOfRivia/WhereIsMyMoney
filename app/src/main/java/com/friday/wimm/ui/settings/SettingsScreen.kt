@@ -1,18 +1,22 @@
 package com.friday.wimm.ui.settings
 
-import androidx.compose.animation.core.*
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,17 +29,40 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
 
+/** 设置页能跳去的子页面 */
+object SettingsRoutes {
+    const val MASCOT = "mascot"
+    const val IMPORT = "import"
+    const val CATEGORIES = "categories"
+}
+
+/**
+ * 设置页。
+ *
+ * Wally（角色形象）、账单导入、大类与规则都收在这里，
+ * 底部导航只留「首页 / 账户 / 统计 / 预算 / 设置」五个入口。
+ */
 @Composable
-fun SettingsScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+fun SettingsScreen(
+    onNavigate: (String) -> Unit = {},
+    onSubPageChanged: (Boolean) -> Unit = {}
+) {
+    val context = LocalContext.current
     var showAutoRecordPage by remember { mutableStateOf(false) }
     var showPermissionsPage by remember { mutableStateOf(false) }
+    var visible by remember { mutableStateOf(false) }
+    val alpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(400, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
+        label = "settingsAlpha"
+    )
 
-    // 子页面
+    LaunchedEffect(Unit) { visible = true }
+
     if (showAutoRecordPage) {
         LaunchedEffect(Unit) { onSubPageChanged(true) }
         AutoRecordScreen(onBack = {
@@ -60,222 +87,148 @@ fun SettingsScreen(onSubPageChanged: (Boolean) -> Unit = {}) {
         return
     }
 
-    // 动画状态
-    var titleVisible by remember { mutableStateOf(false) }
-    var card1Visible by remember { mutableStateOf(false) }
-    var card2Visible by remember { mutableStateOf(false) }
-
-    // 标题动画
-    val titleAlpha by animateFloatAsState(
-        targetValue = if (titleVisible) 1f else 0f,
-        animationSpec = tween(400, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "titleAlpha"
-    )
-    val titleOffsetX by animateFloatAsState(
-        targetValue = if (titleVisible) 0f else -50f,
-        animationSpec = tween(500, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "titleOffsetX"
-    )
-
-    // 卡片动画
-    val card1Alpha by animateFloatAsState(
-        targetValue = if (card1Visible) 1f else 0f,
-        animationSpec = tween(500, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "card1Alpha"
-    )
-    val card1OffsetY by animateFloatAsState(
-        targetValue = if (card1Visible) 0f else 80f,
-        animationSpec = tween(600, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "card1OffsetY"
-    )
-
-    val card2Alpha by animateFloatAsState(
-        targetValue = if (card2Visible) 1f else 0f,
-        animationSpec = tween(500, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "card2Alpha"
-    )
-    val card2OffsetY by animateFloatAsState(
-        targetValue = if (card2Visible) 0f else 80f,
-        animationSpec = tween(600, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-        label = "card2OffsetY"
-    )
-
-    // 动画编排
-    LaunchedEffect(Unit) {
-        titleVisible = true
-        delay(200)
-        card1Visible = true
-        delay(200)
-        card2Visible = true
-    }
-
-    Column(
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .alpha(alpha),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 标题 - 从左侧滑入
-        Text(
-            text = "设置",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .padding(bottom = 16.dp)
-                .alpha(titleAlpha)
-                .offset(x = titleOffsetX.dp)
-        )
+        item {
+            Text(
+                "设置",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
 
-        // 自动识别 - 可跳转入口
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp)
-                .alpha(card1Alpha)
-                .offset(y = card1OffsetY.dp),
-            onClick = { showAutoRecordPage = true }
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        item {
+            SettingsEntry(
+                title = "自动识别",
+                subtitle = "通知监听 / 无障碍服务，决定自动记账灵不灵",
+                onClick = { showAutoRecordPage = true }
+            )
+        }
+        item {
+            SettingsEntry(
+                title = "权限设置",
+                subtitle = "通知、自启动、悬浮窗等权限",
+                onClick = { showPermissionsPage = true }
+            )
+        }
+        item {
+            SettingsEntry(
+                title = "大类与收款方规则",
+                subtitle = "自定义分类，让「美团」自动算进日常饮食",
+                onClick = { onNavigate(SettingsRoutes.CATEGORIES) }
+            )
+        }
+        item {
+            SettingsEntry(
+                title = "账单导入",
+                subtitle = "导入微信 / 支付宝账单，自动识别的漏账也能补上",
+                onClick = { onNavigate(SettingsRoutes.IMPORT) }
+            )
+        }
+        item {
+            SettingsEntry(
+                title = "Wally 形象",
+                subtitle = "换照片或 GIF，调弹跳、贴边、点击反馈",
+                onClick = { onNavigate(SettingsRoutes.MASCOT) }
+            )
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("隐私", fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.padding(2.dp))
                     Text(
-                        text = "自动识别",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    Text(
-                        text = "通知监听 / 无障碍服务",
+                        "所有账目都只存在这台手机里。应用没有联网权限，不上传、不备份、不统计。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Text(
-                    text = ">",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
 
-        // 权限设置 - 可跳转入口
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp)
-                .alpha(card2Alpha)
-                .offset(y = card2OffsetY.dp),
-            onClick = { showPermissionsPage = true }
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("关于", fontWeight = FontWeight.Bold)
+                    Text("我钱呢？！ v1.0", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        text = "权限设置",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    Text(
-                        text = "通知、自启动、悬浮通知等权限",
+                        "一个只在本地记账的应用",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Text(
-                    text = ">",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
 
-        // 关于
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp)
-                .alpha(card2Alpha)
-                .offset(y = card2OffsetY.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Text(
-                    text = "关于",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-                Text(
-                    text = "我钱呢？！ v1.0",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = "一个简洁的记账应用",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-        }
-
-        // 支持作者
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .alpha(card2Alpha)
-                .offset(y = card2OffsetY.dp),
-            onClick = {
-                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://wqn.netlify.app/"))
-                context.startActivity(intent)
-            }
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    val intent = android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://wqn.netlify.app/")
+                    )
+                    runCatching { context.startActivity(intent) }
+                }
             ) {
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
                         Icons.Default.FavoriteBorder,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(end = 12.dp)
+                        tint = MaterialTheme.colorScheme.primary
                     )
+                    Spacer(modifier = Modifier.width(12.dp))
                     Column {
+                        Text("支持作者", fontWeight = FontWeight.Bold)
                         Text(
-                            text = "支持作者",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        )
-                        Text(
-                            text = "如果对你有帮助，欢迎请作者喝杯咖啡",
+                            "如果对你有帮助，欢迎请作者喝杯咖啡",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsEntry(title: String, subtitle: String, onClick: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    text = ">",
-                    style = MaterialTheme.typography.titleLarge,
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            Text(
+                ">",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

@@ -24,4 +24,22 @@ object Money {
     fun fromCents(cents: Long): Double = cents / 100.0
 
     fun formatCents(cents: Long): String = format(fromCents(cents))
+
+    /**
+     * 把用户输入的一串字符解析成「分」。
+     *
+     * 允许带 ¥ ￥ 逗号，允许前后空格；空串、非数字、0 和负数一律返回 null，
+     * 交给调用方去提示，而不是默默记成 0 元。
+     */
+    fun parseCents(text: String): Long? {
+        val cleaned = text.trim()
+            .replace("¥", "").replace("￥", "")
+            .replace(",", "").replace("，", "")
+        if (cleaned.isEmpty()) return null
+        val value = cleaned.toDoubleOrNull() ?: return null
+        if (value.isNaN() || value.isInfinite() || value <= 0.0) return null
+        // 一亿元以上当作输入错误，挡住手滑多打几个零
+        if (value > 100_000_000.0) return null
+        return Math.round(value * 100.0)
+    }
 }

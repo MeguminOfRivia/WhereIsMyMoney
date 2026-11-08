@@ -1,7 +1,24 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+/**
+ * 正式版签名配置。
+ *
+ * 密钥和密码放在仓库外的 .toolchain/keystore/（不进 git），
+ * 只有本机能签出正式包；换机器时要记得把这个目录一起备份，
+ * 否则以后就没法给已安装的用户推送升级了。
+ */
+val keystorePropsFile = rootProject.file("../.toolchain/keystore/keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) {
+        keystorePropsFile.inputStream().use { load(it) }
+    }
+}
+val canSignRelease = keystorePropsFile.exists()
 
 android {
     namespace = "com.friday.wimm"
@@ -11,12 +28,23 @@ android {
         }
     }
 
+    signingConfigs {
+        if (canSignRelease) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.friday.wimm"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.0-debug"
+        versionCode = 3
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -24,6 +52,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (canSignRelease) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

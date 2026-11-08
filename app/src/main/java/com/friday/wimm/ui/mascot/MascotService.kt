@@ -1,4 +1,4 @@
-﻿package com.friday.wimm.ui.mascot
+package com.friday.wimm.ui.mascot
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -119,6 +119,12 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     // 单击 / 双击判定
     private var lastTapAt = 0L
     private var singleTapJob: Job? = null
+
+    /** 是否正在拖拽：拖拽期间禁止其它地方改窗口位置，否则会跟手指抢 */
+    private var windowDragging = false
+
+    /** 贴边动画的 Job：开始拖拽时要先取消，不然会跟手指抢 */
+    private var windowAnimJob: Job? = null
 
     /**
      * 自定义形象始终有内置图兜底，所以不再回退到 Canvas 形象。
@@ -531,24 +537,35 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         LaunchedEffect(panel, currentScale, box, side, vAnchor, speechVisible) {
             val view = composeView ?: return@LaunchedEffect
             val params = windowParams ?: return@LaunchedEffect
+            // 拖拽过程中绝对不许动窗口位置，否则会和手指抢、看起来像「乱飞」
+            if (windowDragging) return@LaunchedEffect
             val density = resources.displayMetrics.density
             val screenW = resources.displayMetrics.widthPixels
             val screenH = contentHeightPx()
-            params.width = (windowWidthDp(box, currentScale, panel != null) * density).toInt()
-            params.height = (totalH * density).toInt()
+            val oldWidth = params.width
+            val oldHeight = params.height
+            val newWidth = (windowWidthDp(box, currentScale, panel != null) * density).toInt()
+            val newHeight = (totalH * density).toInt()
+
             if (_snapEnabled) {
                 // 贴左/右要把 x 顶回去；贴上/下要把 y 顶回去，窗口变形后也不会飘开
                 when (side) {
                     MascotSide.LEFT -> params.x = 0
-                    MascotSide.RIGHT -> params.x = screenW - params.width
-                    MascotSide.NONE -> Unit
+                    MascotSide.RIGHT -> params.x = screenW - newWidth
+                    // 没贴边时，宽度变化（比如弹出预算面板）会让居中的形象左右跳，
+                    // 把窗口反向挪半个宽度差，形象就待在原地
+                    MascotSide.NONE -> if (oldWidth > 0) params.x -= (newWidth - oldWidth) / 2
                 }
                 when (vAnchor) {
                     MascotVAnchor.TOP -> params.y = 0
-                    MascotVAnchor.BOTTOM -> params.y = screenH - params.height
-                    MascotVAnchor.NONE -> Unit
+                    MascotVAnchor.BOTTOM -> params.y = screenH - newHeight
+                    // 气泡出现在形象上方时窗口是向上长的（y 不动、内容下移），
+                    // 这里把 y 反向补偿，保证「说话时形象不动，只有气泡冒出来」
+                    MascotVAnchor.NONE -> if (oldHeight > 0) params.y -= newHeight - oldHeight
                 }
             }
+            params.width = newWidth
+            params.height = newHeight
             // 没贴底时，窗口别越过屏幕下沿
             if (params.y + params.height > screenH - 8) {
                 params.y = (screenH - params.height - 8).coerceAtLeast(0)
@@ -601,6 +618,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                 val down = awaitPointerEvent()
                                 val downChange = down.changes.firstOrNull() ?: continue
                                 if (!downChange.pressed) continue
+                                // 保险：上一次手势如果没收尾，这里重置
+                                windowDragging = false
 
                                 val downTime = System.currentTimeMillis()
                                 var totalDragDist = 0f
@@ -639,7 +658,11 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                             handleTap()
                                         }
                                         // 松手：如果靠近边框就吸附过去
-                                        if (isDragging) snapToNearestEdge()
+                                        // 松手：先结束拖拽状态，再判断要不要贴边
+                                        if (isDragging) {
+                                            windowDragging = false
+                                            snapToNearestEdge()
+                                        }
 
                                         serviceScope.launch {
                                             delay(1500)
@@ -666,6 +689,12 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                         longPressJob.cancel()
                                         if (!isDragging) {
                                             isDragging = true
+                                            // 一开始拖就清掉贴边锚点：
+                                            // 否则它一说话（气泡改变窗口高度）窗口就会被拉回边框
+                                            _side = MascotSide.NONE
+                                            _vAnchor = MascotVAnchor.NONE
+                                            windowDragging = true
+                                            windowAnimJob?.cancel()
                                         }
 
                                         if (isEyeTrackEnabled() && deltaDist > 1f) {
@@ -1086,7 +1115,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val startX = params.x
         val startY = params.y
         if (startX == targetX && startY == targetY) return
-        serviceScope.launch {
+        windowAnimJob?.cancel()
+        windowAnimJob = serviceScope.launch {
             val steps = 10
             for (i in 1..steps) {
                 val t = i.toFloat() / steps

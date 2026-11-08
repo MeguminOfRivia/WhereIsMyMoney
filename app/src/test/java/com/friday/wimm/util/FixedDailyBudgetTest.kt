@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 固定日额度：本月额度 ÷ 当月天数，余数补给前几天，结余继承。
+ * 固定日额度：本月额度 ÷ 当月天数，除不尽的零头加到当天，结余继承到下一天。
  *
  * 这一块最容易出错的地方是「除不尽」：31 天分 2000 元，
  * 每天 64.51 元加起来只有 1999.81，少的两毛不能凭空消失。
@@ -14,31 +14,29 @@ class FixedDailyBudgetTest {
 
     @Test
     fun `除不尽的零头一分不少`() {
-        val split = BudgetMath.splitDaily(200_000, 31)
-        assertEquals(6_451, split.baseCents)
-        assertEquals(19, split.extraDays)
-        val total = (1..31).sumOf { split.quotaOfDay(it) }
-        assertEquals(200_000, total)
+        val plan = BudgetMath.planDaily(200_000, 31)
+        assertEquals(6_451, plan.baseCents)
+        assertEquals(19, plan.remainderCents)
+        assertEquals(200_000, plan.baseCents * 31 + plan.remainderCents)
     }
 
     @Test
     fun `正好整除时没有零头`() {
-        val split = BudgetMath.splitDaily(300_000, 30)
-        assertEquals(10_000, split.baseCents)
-        assertEquals(0, split.extraDays)
-        assertEquals(300_000, (1..30).sumOf { split.quotaOfDay(it) })
+        val plan = BudgetMath.planDaily(300_000, 30)
+        assertEquals(10_000, plan.baseCents)
+        assertEquals(0, plan.remainderCents)
     }
 
     @Test
     fun `小额也能精确分配`() {
-        val split = BudgetMath.splitDaily(10_000, 7)
-        assertEquals(1_428, split.baseCents)
-        assertEquals(4, split.extraDays)
-        assertEquals(10_000, (1..7).sumOf { split.quotaOfDay(it) })
+        val plan = BudgetMath.planDaily(10_000, 7)
+        assertEquals(1_428, plan.baseCents)
+        assertEquals(4, plan.remainderCents)
+        assertEquals(10_000, plan.baseCents * 7 + plan.remainderCents)
     }
 
     @Test
-    fun `月初没有结转`() {
+    fun `月初额度等于每天基数加余数`() {
         val limit = BudgetMath.fixedDailyLimit(
             availableCents = 310_000,
             daysInMonth = 31,
@@ -84,15 +82,27 @@ class FixedDailyBudgetTest {
     }
 
     @Test
+    fun `余数只加在当天不会重复计算`() {
+        // 31 天分 2000 元：最后一天的累计额度正好是全部金额
+        val limit = BudgetMath.fixedDailyLimit(
+            availableCents = 200_000,
+            daysInMonth = 31,
+            dayOfMonth = 31,
+            spentBeforeTodayCents = 0
+        )
+        assertEquals(200_000, limit)
+    }
+
+    @Test
     fun `负数额度也能平摊`() {
-        val split = BudgetMath.splitDaily(-3_100, 31)
-        assertEquals(-3_100, (1..31).sumOf { split.quotaOfDay(it) })
+        val plan = BudgetMath.planDaily(-3_100, 31)
+        assertEquals(-3_100, plan.baseCents * 31 + plan.remainderCents)
     }
 
     @Test
     fun `天数非法时不会崩`() {
-        val split = BudgetMath.splitDaily(1_000, 0)
-        assertEquals(1, split.daysInMonth)
-        assertTrue(split.baseCents > 0)
+        val plan = BudgetMath.planDaily(1_000, 0)
+        assertEquals(1, plan.daysInMonth)
+        assertTrue(plan.baseCents > 0)
     }
 }

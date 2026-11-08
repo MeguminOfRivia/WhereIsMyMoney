@@ -354,7 +354,7 @@ private fun BudgetRow(
                     )
                     if (fixed) {
                         Text(
-                            "每日额度 = 本月可用 ÷ 当月天数，零头分摊到前几天，结余继承到下一天",
+                            "每日额度 = 本月可用 ÷ 当月天数，零头加到当天，结余继承到下一天",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -462,7 +462,7 @@ private fun BudgetEditDialog(
                 Text(
                     if (mode == MonthlyBudget.MODE_FIXED) {
                         "固定日额度 = 本月可用 ÷ 当月天数，自动计算，不用你填。" +
-                            "除不尽的零头会分摊到前几天，每天没用完的额度自动留给第二天。"
+                            "除不尽的零头加到当天额度里，每天没用完的额度自动留给第二天。"
                     } else {
                         "动态日额度 = 本月剩余 ÷ 剩余天数，越花越少，每天额度会自己变。"
                     },

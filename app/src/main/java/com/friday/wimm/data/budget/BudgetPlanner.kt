@@ -149,7 +149,12 @@ object BudgetPlanner {
                         spentBeforeTodayCents = spent - todaySpent
                     )
                     isPastMonth -> 0L
-                    else -> BudgetMath.splitDaily(available, yearMonth.lengthOfMonth()).quotaOfDay(1)
+                    else -> BudgetMath.fixedDailyLimit(
+                        availableCents = available,
+                        daysInMonth = yearMonth.lengthOfMonth(),
+                        dayOfMonth = 1,
+                        spentBeforeTodayCents = 0L
+                    )
                 }
                 else -> BudgetMath.dynamicDailyLimit(remaining, remainingDays)
             }

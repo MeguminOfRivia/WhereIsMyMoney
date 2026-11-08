@@ -63,36 +63,24 @@ object BudgetMath {
     fun monthQuotaForDays(dailyCents: Long, days: Int): Long = dailyCents * days.coerceAtLeast(0)
 
     /**
-     * 把「本月可用额度」平摊到每一天的结果。
+     * 固定日额度的分配结果。
      *
-     * 除不尽的分钱不会丢：余数按「分」补给当月的前 [extraDays] 天，
-     * 于是 Σ(每天额度) 精确等于分之前的总数，不会出现「每天 64.51 × 31 = 1999.81」这种少一分的情况。
+     * 每天都是 [baseCents]，除不尽的 [remainderCents] 分钱全部加到「当天」的额度里，
+     * 这样既保证 Σ(每天额度) 精确等于本月可用额度，又不用每天改基数。
      */
-    data class DailySplit(val baseCents: Long, val extraDays: Int, val daysInMonth: Int) {
+    data class DailyPlan(val baseCents: Long, val remainderCents: Long, val daysInMonth: Int)
 
-        /** 第 [dayOfMonth] 天的基础额度 */
-        fun quotaOfDay(dayOfMonth: Int): Long =
-            baseCents + if (dayOfMonth <= extraDays) 1L else 0L
-
-        /** 第 1 天到第 [dayOfMonth]-1 天，一共分到多少额度 */
-        fun quotaBefore(dayOfMonth: Int): Long {
-            val days = (dayOfMonth - 1).coerceAtLeast(0)
-            return baseCents * days + minOf(extraDays, days).toLong()
-        }
-    }
-
-    /** 本月可用额度 ÷ 当月天数，余数补给前几天 */
-    fun splitDaily(availableCents: Long, daysInMonth: Int): DailySplit {
+    /** 本月可用额度 ÷ 当月天数，余数单独拎出来 */
+    fun planDaily(availableCents: Long, daysInMonth: Int): DailyPlan {
         val days = daysInMonth.coerceAtLeast(1)
         val base = Math.floorDiv(availableCents, days.toLong())
-        val remainder = Math.floorMod(availableCents, days.toLong()).toInt()
-        return DailySplit(base, remainder, days)
+        return DailyPlan(base, availableCents - base * days, days)
     }
 
     /**
      * 固定日额度模式下「今天还能花多少」。
      *
-     * 今天的基础额度 + 之前每一天的结余（省下的加进来，超支的扣掉），
+     * = 每天基数 + 余数 + 之前每一天的结余（省下的加进来，超支的扣掉），
      * 也就是「结余继承到下一天」。返回负数表示今天一开始就欠着。
      */
     fun fixedDailyLimit(
@@ -101,8 +89,9 @@ object BudgetMath {
         dayOfMonth: Int,
         spentBeforeTodayCents: Long
     ): Long {
-        val split = splitDaily(availableCents, daysInMonth)
-        val carry = split.quotaBefore(dayOfMonth) - spentBeforeTodayCents
-        return split.quotaOfDay(dayOfMonth) + carry
+        val plan = planDaily(availableCents, daysInMonth)
+        val daysBefore = (dayOfMonth - 1).coerceAtLeast(0)
+        val carry = plan.baseCents * daysBefore - spentBeforeTodayCents
+        return plan.baseCents + plan.remainderCents + carry
     }
 }

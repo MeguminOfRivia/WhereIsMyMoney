@@ -4,11 +4,13 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.friday.wimm.data.model.Account
 import com.friday.wimm.data.model.Card
 import com.friday.wimm.data.model.CardCategory
 import com.friday.wimm.data.model.CardMerchantCategory
 import com.friday.wimm.data.model.Category
 import com.friday.wimm.data.model.MerchantCategory
+import com.friday.wimm.data.model.MerchantRule
 import com.friday.wimm.data.model.Transaction
 import com.friday.wimm.util.Money
 
@@ -23,7 +25,12 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         db.execSQL(SQL_CREATE_CARD_CATEGORIES)
         db.execSQL(SQL_CREATE_CARD_MERCHANT_CATEGORIES)
         db.execSQL(SQL_CREATE_PENDING_TRANSFERS)
+        db.execSQL(SQL_CREATE_ACCOUNTS)
+        db.execSQL(SQL_CREATE_MERCHANT_RULES)
+        db.execSQL(SQL_CREATE_BUDGETS)
+        db.execSQL(SQL_CREATE_BUDGET_ADJUSTMENTS)
         db.execSQL(SQL_CREATE_UNIQUE_TRANSACTION_NO)
+        seedDefaults(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -59,6 +66,60 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         if (oldVersion < 8) {
             // 升级到版本8：转账「待确认」记录表
             db.execSQL(SQL_CREATE_PENDING_TRANSFERS)
+        }
+        if (oldVersion < 9) {
+            // 升级到版本9：账户 / 大类扩展 / 收款方规则 / 预算
+            db.execSQL("ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'expense'")
+            db.execSQL("ALTER TABLE categories ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE categories ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE categories ADD COLUMN isBuiltin INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE transactions ADD COLUMN accountId INTEGER NOT NULL DEFAULT 0")
+            db.execSQL(SQL_CREATE_ACCOUNTS)
+            db.execSQL(SQL_CREATE_MERCHANT_RULES)
+            db.execSQL(SQL_CREATE_BUDGETS)
+            db.execSQL(SQL_CREATE_BUDGET_ADJUSTMENTS)
+            seedDefaults(db)
+        }
+    }
+
+    /**
+     * 首次建库（或升级到 v9）时写入默认账户与默认大类。
+     * 只在该表为空时执行，绝不会覆盖用户自己加的内容。
+     */
+    private fun seedDefaults(db: SQLiteDatabase) {
+        val accountCount = db.rawQuery("SELECT COUNT(*) FROM accounts", null).use {
+            if (it.moveToFirst()) it.getInt(0) else 0
+        }
+        if (accountCount == 0) {
+            val now = System.currentTimeMillis()
+            db.execSQL(
+                "INSERT INTO accounts(name, type, initialBalanceCents, balanceStartAt, archived, createdAt, sortOrder) " +
+                    "VALUES(?, ?, 0, ?, 0, ?, 0)",
+                arrayOf("微信零钱", Account.TYPE_WECHAT, now, now)
+            )
+            db.execSQL(
+                "INSERT INTO accounts(name, type, initialBalanceCents, balanceStartAt, archived, createdAt, sortOrder) " +
+                    "VALUES(?, ?, 0, ?, 0, ?, 1)",
+                arrayOf("支付宝花呗", Account.TYPE_ALIPAY, now, now)
+            )
+        }
+
+        val categoryCount = db.rawQuery("SELECT COUNT(*) FROM categories", null).use {
+            if (it.moveToFirst()) it.getInt(0) else 0
+        }
+        if (categoryCount == 0) {
+            DEFAULT_EXPENSE_CATEGORIES.forEachIndexed { index, pair ->
+                db.execSQL(
+                    "INSERT INTO categories(name, color, kind, sortOrder, archived, isBuiltin) VALUES(?, ?, 'expense', ?, 0, 1)",
+                    arrayOf(pair.first, pair.second, index)
+                )
+            }
+            DEFAULT_INCOME_CATEGORIES.forEachIndexed { index, pair ->
+                db.execSQL(
+                    "INSERT INTO categories(name, color, kind, sortOrder, archived, isBuiltin) VALUES(?, ?, 'income', ?, 0, 1)",
+                    arrayOf(pair.first, pair.second, 100 + index)
+                )
+            }
         }
     }
 
@@ -765,8 +826,82 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     }
 
     companion object {
+        private const val SQL_CREATE_BUDGETS = """
+            CREATE TABLE IF NOT EXISTS budgets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                categoryId INTEGER NOT NULL,
+                period TEXT NOT NULL,
+                amountCents INTEGER NOT NULL,
+                dailyMode TEXT NOT NULL DEFAULT 'dynamic',
+                dailyAmountCents INTEGER NOT NULL DEFAULT 0,
+                createdAt INTEGER NOT NULL,
+                UNIQUE(categoryId, period)
+            )
+        """
+
+        private const val SQL_CREATE_BUDGET_ADJUSTMENTS = """
+            CREATE TABLE IF NOT EXISTS budget_adjustments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                categoryId INTEGER NOT NULL,
+                period TEXT NOT NULL,
+                deltaCents INTEGER NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                createdAt INTEGER NOT NULL
+            )
+        """
+
+        private const val SQL_CREATE_ACCOUNTS = """
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'other',
+                initialBalanceCents INTEGER NOT NULL DEFAULT 0,
+                balanceStartAt INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                createdAt INTEGER NOT NULL,
+                sortOrder INTEGER NOT NULL DEFAULT 0
+            )
+        """
+
+        private const val SQL_CREATE_MERCHANT_RULES = """
+            CREATE TABLE IF NOT EXISTS merchant_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern TEXT NOT NULL,
+                matchType TEXT NOT NULL DEFAULT 'contains',
+                categoryId INTEGER NOT NULL,
+                createdAt INTEGER NOT NULL,
+                UNIQUE(pattern, matchType)
+            )
+        """
+
+        /** 内置支出大类（名称 → 颜色） */
+        private val DEFAULT_EXPENSE_CATEGORIES = listOf(
+            "日常饮食" to "#FF8A65",
+            "生活用品" to "#4DB6AC",
+            "交通出行" to "#64B5F6",
+            "住房水电" to "#9575CD",
+            "医疗健康" to "#4DD0E1",
+            "娱乐休闲" to "#FFB74D",
+            "大件采买" to "#A1887F",
+            "旅游" to "#81C784",
+            "人情往来" to "#F06292",
+            "学习进修" to "#7986CB",
+            "通讯网络" to "#90A4AE",
+            "杂项" to "#BDBDBD",
+            "未分类" to "#9E9E9E"
+        )
+
+        /** 内置收入大类 */
+        private val DEFAULT_INCOME_CATEGORIES = listOf(
+            "工资" to "#66BB6A",
+            "奖金" to "#9CCC65",
+            "红包" to "#EF5350",
+            "退款" to "#26A69A",
+            "其他收入" to "#78909C"
+        )
+
         const val DATABASE_NAME = "expense_database"
-        const val DATABASE_VERSION = 8
+        const val DATABASE_VERSION = 9
 
         /** 把历史重复交易号的「后来者」置空，保证唯一索引能建起来（不会删除任何记录） */
         private const val SQL_DEDUP_TRANSACTION_NO = """
@@ -816,7 +951,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
                 type TEXT DEFAULT 'expense',
                 transactionNo TEXT,
                 dataSource TEXT DEFAULT 'file',
-                fileId INTEGER DEFAULT 0
+                fileId INTEGER DEFAULT 0,
+                accountId INTEGER NOT NULL DEFAULT 0
             )
         """
 
@@ -824,7 +960,11 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             CREATE TABLE categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                color TEXT NOT NULL
+                color TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'expense',
+                sortOrder INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                isBuiltin INTEGER NOT NULL DEFAULT 0
             )
         """
 

@@ -56,7 +56,7 @@ private data class AccountRow(val account: Account, val balanceCents: Long)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AccountsScreen() {
+fun AccountsScreen(refreshKey: Int = 0) {
     val context = LocalContext.current
     val dao = (context.applicationContext as MyApplication).financeDao
     val scope = rememberCoroutineScope()
@@ -74,7 +74,7 @@ fun AccountsScreen() {
         totalCents = loaded.filter { !it.account.archived }.sumOf { it.balanceCents }
     }
 
-    LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(refreshKey) { reload() }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("账户") }) }

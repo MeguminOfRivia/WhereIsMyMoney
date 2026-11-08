@@ -71,7 +71,7 @@ import java.time.YearMonth
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BudgetScreen() {
+fun BudgetScreen(refreshKey: Int = 0) {
     val app = LocalContext.current.applicationContext as MyApplication
     val financeDao = app.financeDao
     val scope = rememberCoroutineScope()
@@ -93,7 +93,7 @@ fun BudgetScreen() {
         expenseCategories = data.second
     }
 
-    LaunchedEffect(period) { reload() }
+    LaunchedEffect(refreshKey, period) { reload() }
 
     Scaffold(
         topBar = {

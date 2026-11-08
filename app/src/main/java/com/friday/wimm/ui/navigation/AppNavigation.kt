@@ -13,6 +13,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -78,13 +79,16 @@ private fun MainContent() {
 
     // 子页面：null 表示当前停在标签页上
     var subPage by remember { mutableStateOf<String?>(null) }
-    // 从子页面回来或者切页时 +1，让首页重新查一次数据
+    // 从子页面回来或者切页时 +1，让各页重新查一次数据
     var refreshTick by remember { mutableIntStateOf(0) }
 
     fun closeSubPage() {
         subPage = null
         refreshTick++
     }
+
+    // 每切到一页就刷新，避免「刚在首页改完账，切到统计还是旧数字」
+    LaunchedEffect(pagerState.currentPage) { refreshTick++ }
 
     BackHandler(enabled = subPage != null) { closeSubPage() }
 
@@ -106,7 +110,7 @@ private fun MainContent() {
                                         pagerState.scrollToPage(index)
                                     }
                                 }
-                                if (index == 0) refreshTick++
+                                refreshTick++
                             }
                         )
                     }
@@ -125,9 +129,9 @@ private fun MainContent() {
                 ) { page ->
                     when (page) {
                         0 -> LedgerHomeScreen(refreshKey = refreshTick)
-                        1 -> AccountsScreen()
-                        2 -> StatsScreen()
-                        3 -> BudgetScreen()
+                        1 -> AccountsScreen(refreshKey = refreshTick)
+                        2 -> StatsScreen(refreshKey = refreshTick)
+                        3 -> BudgetScreen(refreshKey = refreshTick)
                         4 -> SettingsScreen(onNavigate = { subPage = it })
                     }
                 }

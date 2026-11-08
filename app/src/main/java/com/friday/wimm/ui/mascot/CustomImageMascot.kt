@@ -11,8 +11,8 @@ import android.util.LruCache
 import android.widget.ImageView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -55,6 +56,8 @@ fun CustomImageMascot(
     flipHorizontal: Boolean = false,
     blinkUri: String? = null,
     blinkEnabled: Boolean = false,
+    /** 贴边时图片往哪一边靠；NONE 表示居中 */
+    alignSide: MascotSide = MascotSide.NONE,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -127,10 +130,33 @@ fun CustomImageMascot(
     val squashY = squash.value
     val squashX = 1f / sqrt(squashY)
 
-    Box(modifier = modifier.clipToBounds(), contentAlignment = Alignment.BottomCenter) {
+    // 图片按自身长宽比铺满整个盒子：这样盒子的边缘就是图片的边缘，
+    // 贴边时「图片最侧边的那一列像素」才能真的顶到屏幕边框。
+    val aspect = remember(current) {
+        val w = current?.intrinsicWidth ?: 0
+        val h = current?.intrinsicHeight ?: 0
+        if (w > 0 && h > 0) w.toFloat() / h.toFloat() else 0.8f
+    }
+    val align = when (alignSide) {
+        MascotSide.LEFT -> Alignment.BottomStart
+        MascotSide.RIGHT -> Alignment.BottomEnd
+        MascotSide.NONE -> Alignment.BottomCenter
+    }
+
+    BoxWithConstraints(modifier = modifier.clipToBounds(), contentAlignment = align) {
+        val maxW = maxWidth
+        val maxH = maxHeight
+        val size = remember(aspect, maxW, maxH) {
+            val boxAspect = if (maxH.value > 0f) maxW.value / maxH.value else aspect
+            if (aspect >= boxAspect) {
+                maxW to (maxW.value / aspect).dp
+            } else {
+                (maxH.value * aspect).dp to maxH
+            }
+        }
         AndroidView(
             modifier = Modifier
-                .fillMaxSize()
+                .size(size.first, size.second)
                 .graphicsLayer {
                     // 贴边方向变化时整张图水平镜像，保证"同一侧始终靠墙"
                     scaleX = squashX * if (flipHorizontal) -1f else 1f
@@ -139,7 +165,7 @@ fun CustomImageMascot(
                 },
             factory = { ctx ->
                 ImageView(ctx).apply {
-                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    scaleType = ImageView.ScaleType.FIT_XY
                 }
             },
             update = { view ->

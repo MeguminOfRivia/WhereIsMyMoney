@@ -144,6 +144,13 @@ fun LedgerHomeScreen(refreshKey: Int = 0) {
 
     LaunchedEffect(refreshKey, rangeMode, accountId, categoryId, typeFilter, keyword) { reload() }
 
+    // 从微信/支付宝付完款切回来时，账本可能刚被通知服务写了一条，立刻刷新一下
+    androidx.lifecycle.compose.LifecycleEventEffect(
+        androidx.lifecycle.Lifecycle.Event.ON_RESUME
+    ) {
+        scope.launch { reload() }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(

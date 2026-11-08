@@ -159,7 +159,12 @@ fun SettingsScreen(
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("关于", fontWeight = FontWeight.Bold)
-                    Text("我钱呢？！ v1.0", style = MaterialTheme.typography.bodyMedium)
+                    Text("我钱呢？！ v1.0-debug", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "测试版：还在改，账目请自行核对",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Text(
                         "一个只在本地记账的应用",
                         style = MaterialTheme.typography.bodySmall,

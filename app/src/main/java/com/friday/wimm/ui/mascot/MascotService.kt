@@ -665,6 +665,7 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         speechVisible = mascotState.speechText != null,
                         clickTick = mascotState.clickTick,
                         flipHorizontal = shouldFlip(),
+                        alignSide = side,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -989,7 +990,8 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val metrics = resources.displayMetrics
         val screenW = metrics.widthPixels
         val screenH = metrics.heightPixels
-        val threshold = SNAP_THRESHOLD_DP * metrics.density
+        // 屏幕越宽容错越大：1080px 的屏幕上大约 65dp 以内都算「想贴边」
+        val threshold = maxOf(SNAP_THRESHOLD_DP * metrics.density, screenW * 0.18f)
 
         var targetX = params.x
         var side = MascotSide.NONE

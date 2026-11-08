@@ -91,7 +91,7 @@ private enum class StatsRange(val label: String) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StatsScreen() {
+fun StatsScreen(refreshKey: Int = 0) {
     val context = LocalContext.current
     val app = context.applicationContext as MyApplication
     val ledgerDao = app.ledgerDao
@@ -189,7 +189,7 @@ fun StatsScreen() {
         dayCount = data.days
     }
 
-    LaunchedEffect(range, accountId, categoryId, keyword) { reload() }
+    LaunchedEffect(refreshKey, range, accountId, categoryId, keyword) { reload() }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/csv")

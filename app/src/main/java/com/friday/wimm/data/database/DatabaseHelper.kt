@@ -170,7 +170,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             type = cursor.getString(cursor.getColumnIndexOrThrow("type")),
             transactionNo = try { cursor.getString(cursor.getColumnIndexOrThrow("transactionNo")) } catch (e: Exception) { null },
             dataSource = try { cursor.getString(cursor.getColumnIndexOrThrow("dataSource")) } catch (e: Exception) { "file" },
-            fileId = try { cursor.getLong(cursor.getColumnIndexOrThrow("fileId")) } catch (e: Exception) { 0 }
+            fileId = try { cursor.getLong(cursor.getColumnIndexOrThrow("fileId")) } catch (e: Exception) { 0 },
+            accountId = try { cursor.getLong(cursor.getColumnIndexOrThrow("accountId")) } catch (e: Exception) { 0 }
         )
     }
 
@@ -245,6 +246,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             put("transactionNo", transaction.transactionNo)
             put("dataSource", transaction.dataSource)
             put("fileId", transaction.fileId)
+            put("accountId", transaction.accountId)
         }
         return db.insert("transactions", null, values)
     }
@@ -269,6 +271,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             put("transactionNo", transaction.transactionNo)
             put("dataSource", transaction.dataSource)
             put("fileId", transaction.fileId)
+            put("accountId", transaction.accountId)
         }
         val rowId = db.insertWithOnConflict(
             "transactions",
@@ -389,6 +392,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
                     put("transactionNo", transaction.transactionNo)
                     put("dataSource", transaction.dataSource)
                     put("fileId", fileId)
+                put("accountId", transaction.accountId)
                 }
                 db.insert("transactions", null, values)
                 insertedCount++

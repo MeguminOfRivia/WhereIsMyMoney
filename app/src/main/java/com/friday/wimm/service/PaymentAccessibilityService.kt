@@ -161,12 +161,15 @@ class PaymentAccessibilityService : AccessibilityService() {
         val transaction = Transaction(
             amount = amount,
             merchant = draft.merchant,
+            categoryId = application.financeDao.resolveCategoryIdForMerchant(draft.merchant)
+                ?: application.financeDao.getFallbackCategoryId(draft.kind.value),
             source = draft.source,
             timestamp = now,
             type = draft.kind.value,
             transactionNo = draft.fingerprint,
             dataSource = "accessibility",
-            note = draft.note
+            note = draft.note,
+            accountId = application.financeDao.getDefaultAccountIdForSource(draft.source)
         )
         val result = application.transactionRepository.insertDedup(transaction)
         if (!result.inserted) return

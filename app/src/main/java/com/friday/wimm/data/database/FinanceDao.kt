@@ -105,6 +105,32 @@ class FinanceDao(private val helper: DatabaseHelper) {
     fun getTotalBalanceCents(): Long =
         getAllAccounts().sumOf { getAccountBalanceCents(it.id) }
 
+    /**
+     * 按流水来源找默认账户：微信 → 微信类账户，支付宝 → 支付宝类账户。
+     * 页面里明确读到银行卡时，调用方应优先用读到的那张卡。
+     */
+    fun getDefaultAccountIdForSource(source: String): Long {
+        val type = when (source) {
+            "wechat" -> Account.TYPE_WECHAT
+            "alipay" -> Account.TYPE_ALIPAY
+            else -> return 0L
+        }
+        val cursor = helper.readableDatabase.query(
+            "accounts", arrayOf("id"), "type = ? AND archived = 0",
+            arrayOf(type), null, null, "sortOrder ASC, id ASC"
+        )
+        var id = 0L
+        if (cursor.moveToFirst()) id = cursor.getLong(0)
+        cursor.close()
+        return id
+    }
+
+    /** 兜底大类：支出用「未分类」，收入用「其他收入」 */
+    fun getFallbackCategoryId(kind: String): Long? {
+        val name = if (kind == Category.KIND_INCOME) "其他收入" else "未分类"
+        return getCategoryByName(name, kind)?.id
+    }
+
     // ── 大类 ────────────────────────────────────────────────
 
     fun getCategories(kind: String? = null, includeArchived: Boolean = false): List<Category> {

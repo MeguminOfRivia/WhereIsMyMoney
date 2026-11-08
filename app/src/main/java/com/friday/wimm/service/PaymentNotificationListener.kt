@@ -125,15 +125,22 @@ class PaymentNotificationListener : NotificationListenerService() {
         }
 
         val merchant = com.friday.wimm.util.MerchantNames.better(adopted?.merchant, draft.merchant)
+        // 账户归属：默认按来源 App；大类：先查收款方规则，再落到兜底大类
+        val finance = application.financeDao
+        val accountId = finance.getDefaultAccountIdForSource(draft.source)
+        val categoryId = finance.resolveCategoryIdForMerchant(merchant)
+            ?: finance.getFallbackCategoryId(draft.kind.value)
         val transaction = Transaction(
             amount = draft.amountCents / 100.0,
             merchant = merchant,
+            categoryId = categoryId,
             source = draft.source,
             timestamp = now,
             type = draft.kind.value,
             transactionNo = draft.fingerprint,
             dataSource = "notification",
-            note = draft.note
+            note = draft.note,
+            accountId = accountId
         )
 
         val result = application.transactionRepository.insertDedup(transaction)
@@ -210,13 +217,15 @@ class PaymentNotificationListener : NotificationListenerService() {
         val transaction = Transaction(
             amount = booking.amountCents / 100.0,
             merchant = booking.merchant,
+            categoryId = application.financeDao.getFallbackCategoryId(booking.kind),
             source = source,
             timestamp = System.currentTimeMillis(),
             type = booking.kind,
             // 用待确认记录的 id 作为交易号：同一笔转账无论确认通知来几次都只入账一次
             transactionNo = "transfer:${booking.transferId}",
             dataSource = "notification",
-            note = booking.note
+            note = booking.note,
+            accountId = application.financeDao.getDefaultAccountIdForSource(source)
         )
         val result = application.transactionRepository.insertDedup(transaction)
         if (!result.inserted) return

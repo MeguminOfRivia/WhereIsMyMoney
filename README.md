@@ -172,11 +172,16 @@
 
 ```bash
 ./gradlew :app:assembleDebug        # 产出 app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:assembleRelease      # 正式包（需要签名配置，见下）
 ./gradlew :app:testDebugUnitTest    # 跑单元测试
 ```
 
 `local.properties` 里把 `sdk.dir` 指向你的 Android SDK 即可。
 界面全部是 Jetpack Compose，没有引入任何第三方 UI 库；图表是自己用 Canvas 画的。
+
+**正式版签名**：密钥和密码放在仓库外的 `.toolchain/keystore/keystore.properties`（已 gitignore），
+`app/build.gradle.kts` 里读到它才会给 release 包签名，读不到就产出未签名包。
+**这个文件丢了就再也无法给已安装的用户推升级**，换机器时请务必一起备份。
 
 ### 代码结构
 

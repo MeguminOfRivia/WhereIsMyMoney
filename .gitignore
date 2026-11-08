@@ -1,4 +1,4 @@
-# ── Gradle ──────────────────────────────────────────────
+﻿# ── Gradle ──────────────────────────────────────────────
 .gradle/
 build/
 !gradle/wrapper/gradle-wrapper.jar
@@ -31,3 +31,8 @@ output-metadata.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ── 签名文件（密钥不进仓库） ──
+*.jks
+*.keystore
+keystore.properties

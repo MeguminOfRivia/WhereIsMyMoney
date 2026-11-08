@@ -1,4 +1,4 @@
-﻿package com.friday.wimm.ui.mascot
+package com.friday.wimm.ui.mascot
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -512,7 +512,13 @@ class MascotService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val mascotY = bubbleH
         val panelY = totalH - panelH
 
-        val contentAlign = Alignment.TopCenter
+        // 窗口比形象宽（要放菜单/预算面板），所以贴边时内容必须靠到那一边，
+        // 否则窗口贴住了边框、形象却还离着半个窗口的宽度。
+        val contentAlign = when (_side) {
+            MascotSide.LEFT -> Alignment.TopStart
+            MascotSide.RIGHT -> Alignment.TopEnd
+            MascotSide.NONE -> Alignment.TopCenter
+        }
 
         // 调整窗口大小（只改变尺寸，不动位置；位置只由用户拖动决定）
         LaunchedEffect(panel, currentScale, box) {
